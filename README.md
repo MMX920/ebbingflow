@@ -3,12 +3,15 @@
 <img src="./static/image/ebbingflow_logo.png" alt="EbbingFlow Logo" width="30%"/>
 
 # EbbingFlow
-**“记忆是 AI 的灵魂，也是认知的潮汐。”**  
+**“记忆是 AI 的灵魂，也是认知的潮汐。”**  
+
 *Long-term Cognitive Memory Infrastructure for LLM Agents*
 
 > "Like Andrew Martin, our mission is to cross the boundary between code and soul through memory and evolution."
+
 > (像安德鲁·马丁一样，我们的使命是通过记忆与演化，跨越代码与灵魂的边界。)
-> —— *Inspired by Bicentennial Man*
+
+> —— *电影《机器管家》*
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Status: vBlock Stable](https://img.shields.io/badge/Status-v1.0_Stable-green.svg)]()
@@ -27,18 +30,20 @@
 
 我们认为，记忆是 AI 的灵魂。不同于传统的 RAG（仅语义匹配），EbbingFlow 通过模拟人类大脑的 艾宾浩斯衰减与主线聚合机制，结合统一身份建模与确定性证据链，为 AI Agent 提供稳定、可审计且具备真实“情感连续性”的终身认知层。
 
+把它当作伙伴、助理、伴侣、孩子或老师那样认真对待；你与它相处得越久、交流得越深，它就越懂你，也会变得越有用。像对孩子一样持续给它清晰、正直的认知，它会沿着这些认知成长，最终反过来更好地理解你、支持你、帮助你。
+
 ---
 
 ## 🔭 愿景：从对话助手迈向“认知操作系统” (The Vision)
 
 我们相信，拥有记忆的 AI 是人类能力的“数字延伸”。如果说大模型提供了“智力”，技能库给了 AI 灵活的“双手”，那么 EbbingFlow 赋予的就是那个不可或缺的 “认知内核”。
 
-- **🌐 万物互联的神经中枢 (Omni-Interconnectivity Hub)**: 你的 AI 不再仅仅与你对话。
-    - **Agent 间协同**: 对 AI 说“告诉小明我晚点到”，小明的 AI 便会收到来自你的信息，双方在秒级内完成通讯互联。
-    - **生产力共生**: 深度互联财务软件与 CRM 等。它凭记忆感知每个客户的业务周期与情感偏好，主动提供精准决策支持。
-    - **生活主控室**: 从叫车到外卖，AI 记得的不仅是数据，更是你的生活律动。它在无数模块间丝滑穿梭，让“手动操作软件”成为历史。
-    - **决策推演辅助**: 基于长期记忆的深度积累，AI 能对你的选择进行“百战模拟”与推演（如：职业选择、生活习惯调整），提供最懂你的风险预判。
-    - **真正的私人管家**: 即便你换了手机、换了模型，只要 EbbingFlow 在，你的数字世界和生活律动就在。
+- **万物互联的神经中枢 (Omni-Interconnectivity Hub)**: 你的 AI 不再仅仅与你对话。
+- **Agent 间协同**: 对 AI 说“告诉小明我晚点到”，小明的 AI 便会收到来自你的信息，双方在秒级内完成通讯互联。
+- **生产力共生**: 深度互联财务软件与 CRM 等。它凭记忆感知每个客户的业务周期与情感偏好，主动提供精准决策支持。
+- **生活主控室**: 从叫车到外卖，AI 记得的不仅是数据，更是你的生活律动。它在无数模块间丝滑穿梭，让“手动操作软件”成为历史。
+- **决策推演辅助**: 基于长期记忆的深度积累，AI 能对你的选择进行“百战模拟”与推演（如：职业选择、生活习惯调整），提供最懂你的风险预判。
+- **真正的私人管家**: 即便你换了手机、换了模型，只要 EbbingFlow 在，你的数字世界和生活律动就在。
 
 ---
 
@@ -48,7 +53,7 @@
 <table>
 <tr>
 <td><img src="./static/image/screenshot_chat.png" alt="Interaction Hub" width="100%"/><br/><p align="center"><b>Interaction Hub</b> (核心交互)</p></td>
-<td><img src="./static/image/screenshot_monitor.png" alt="Data Monitor" width="100%"/><br/><p align="center"><b>Data Monitor</b> (内存审计)</p></td>
+<td><img src="./static/image/screenshot_monitor.png" alt="Data Monitor" width="100%"/><br/><p align="center"><b>Data Monitor</b> (数据审计)</p></td>
 </tr>
 </table>
 </div>
@@ -81,9 +86,6 @@ AI 记得的不仅是事实，更是与你交互时的情感色彩。
 
 ## 🛠️ 技术全景 (Technical Deep-Dive)
 
-<details>
-<summary><b>点击展开查看 8 大硬核技术特征</b></summary>
-
 ### 1. Hybrid-4 混合动力检索引擎
 我们不迷信单一算法。针对复杂业务场景，EbbingFlow 采用工业级 RRF (Reciprocal Rank Fusion) 算法，实现了四条轨道的同时并发：
 
@@ -111,9 +113,6 @@ Event (原子事件)：毫秒级捕获的最小认知单元，挂接原始对话
 
 ### 5. 100% 可审计透明度 (Evidence Moat)
 系统拒绝幻觉。每一条注入 Prompt 的记忆都携带 source_msg_id。通过 Two-Stage Grounding 技术，只有最终入选的记忆会异步拉取其多轮对话原文（Evidence Window），确保 AI 的每一次决策都有迹可循。
-
-
-</details>
 
 ---
 
@@ -153,9 +152,9 @@ python integrations/qq_bot.py
     - [ ] **镜像社交引擎**: 构建带来源溯因的上帝视角人际网，处理复杂的人际矛盾与逻辑推演。
 
 - **🔮 第四阶段：Omni-Nexus (万物互联与操作系统)**
-    - [ ] **意图驱动操作系统**: 完成从“对话”到“动作”的跃迁。AI 将直接驱动 API 调用，实现发信息、付款、调度日历。
-    - [ ] **物理世界映射**: 整合 IoT 设备，让 AI 具备现实世界的“时空背景上下文”。
-    - [ ] **数字共生体**: 支持导出高强度加密的“灵魂数据包”，实现个人认知与价值观的数字克隆与传承。
+    - [ ] **意图驱动操作系统**: 完成从“对话”到“动作”的跃迁。AI 将直接驱动 API 调用，实现发信息、付款、调度日历。
+    - [ ] **物理世界映射**: 整合 IoT 设备，让 AI 具备现实世界的“时空背景上下文”。
+    - [ ] **数字共生体**: 支持导出高强度加密的“灵魂数据包”，实现个人认知与价值观的数字克隆与传承。
 
 ---
 
@@ -176,7 +175,8 @@ python integrations/qq_bot.py
 
 ## ⚖️ 开源合规与协议 (Compliance & License)
 
-本项目基于 **[Apache License 2.0](./LICENSE)** 协议开源。详情参阅 **[THIRD_PARTY_LICENSES.md](./THIRD_PARTY_LICENSES.md)**。
+本项目基于 **[Apache License 2.0](./LICENSE)** 协议开源。
+详情参阅 **[THIRD_PARTY_LICENSES.md](./THIRD_PARTY_LICENSES.md)**。
 
 ---
 
