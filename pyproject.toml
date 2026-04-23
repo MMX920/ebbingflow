@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ebbingflow"
+version = "1.0.0"
+description = "EbbingFlow memory engine"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "EbbingFlow Contributors" }]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+keywords = [
+    "agent-memory",
+    "rag",
+    "knowledge-graph",
+    "persona",
+    "llm",
+    "chat-engine",
+]
+dynamic = ["dependencies"]
+
+[project.urls]
+Homepage = "https://github.com/MMX920/ebbingflow"
+Repository = "https://github.com/MMX920/ebbingflow"
+Issues = "https://github.com/MMX920/ebbingflow/issues"
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = ["test_*.py"]

@@ -1,0 +1,33 @@
+name: Feature Request
+description: Suggest an enhancement for EbbingFlow
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Statement
+      description: What problem are you trying to solve?
+      placeholder: I need ... because ...
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed Solution
+      description: Describe your expected behavior/API.
+      placeholder: Add support for ...
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Other approaches you considered.
+  - type: textarea
+    id: impact
+    attributes:
+      label: Expected Impact
+      description: How this helps users or maintainers.
+

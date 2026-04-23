@@ -1,0 +1,608 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EbbingFlow | 认知动力实时交互终端 v1.0</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root {
+            --bg-white: #ffffff;
+            --panel-bg: #fdfdfd;
+            --text-main: #000000;
+            --text-dim: #888888;
+            --border-heavy: #000000;
+            --border-light: #eeeeee;
+            --header-bg: #fafafa;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'PingFang SC', 'Microsoft YaHei', 'Inter', sans-serif;
+            background-color: var(--bg-white);
+            color: var(--text-main);
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .workspace { display: flex; width: 100%; flex: 1; overflow: hidden; }
+
+        .header {
+            padding: 16px 30px;
+            border-bottom: 3px solid #000;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-family: 'Inter', -apple-system, sans-serif;
+            background: var(--header-bg);
+            z-index: 1000;
+            text-rendering: optimizeLegibility;
+        }
+        .header-brand {
+            display: flex;
+            align-items: center;
+        }
+        .brand-name {
+            letter-spacing: 5px;
+            font-weight: 950;
+            text-transform: uppercase;
+            font-size: 0.9rem;
+        }
+        .brand-slash {
+            margin: 0 15px;
+            opacity: 0.2;
+            font-weight: 300;
+            font-size: 1.2rem;
+        }
+        .page-title {
+            font-weight: 400;
+            letter-spacing: 1px;
+            font-size: 0.85rem;
+            color: #444;
+        }
+        .version-tag {
+            margin-left: 12px;
+            font-size: 0.6rem;
+            opacity: 0.5;
+            font-weight: 800;
+            font-family: 'JetBrains Mono';
+            border: 1px solid #000;
+            padding: 1px 5px;
+            border-radius: 2px;
+            vertical-align: middle;
+        }
+        .status-active {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: #000;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.75rem;
+        }
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            background: #000;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.3; transform: scale(0.8); }
+            100% { opacity: 1; transform: scale(1); }
+        }
+
+        .panel { background-color: var(--panel-bg); display: flex; flex-direction: column; position: relative; border-right: 1px solid var(--border-light); }
+        .panel-header { padding: 14px 18px; border-bottom: 2px solid var(--border-heavy); font-size: 0.85rem; font-weight: 900; display: flex; justify-content: space-between; align-items: center; background: #fff; }
+
+        .col-graph { flex: 2; position: relative; background: #fff; }
+        #graph-container { flex: 1; position: relative; overflow: hidden; }
+
+        .col-sop { width: 380px; min-width: 320px; }
+        .col-chat { flex: 1.5; display: flex; flex-direction: column; background: #fff; }
+
+        /* --- Graph Overlays --- */
+        .graph-legend { position: absolute; bottom: 30px; left: 30px; font-size: 0.7rem; color: #000; display:flex; gap: 20px; border: 2px solid #000; padding: 10px 15px; background: #fff; font-weight: bold; }
+        .legend-item { display:flex; align-items:center; gap:8px; }
+        .dot { border-radius: 50%; border: 1px solid #000; }
+
+        .node-details { 
+            position: absolute; top: 70px; left: 30px; width: 280px; padding: 22px; 
+            background: #fff; border: 3px solid #000; 
+            display: none; z-index: 1000; font-size: 0.9rem; line-height: 1.8;
+            box-shadow: 15px 15px 0px rgba(0,0,0,0.1);
+        }
+
+        /* --- 左右气泡通讯样式 v2.0 --- */
+        #chat-messages { flex: 1; padding: 30px; overflow-y: auto; display: flex; flex-direction: column; gap: 20px; background: #fff; }
+        
+        .log-entry { max-width: 85%; display: flex; flex-direction: column; }
+        .log-body { padding: 15px 20px; border: 2px solid #000; font-size: 1rem; line-height: 1.6; word-wrap: break-word; }
+        .log-header { font-size: 0.65rem; font-weight: 900; margin-bottom: 6px; letter-spacing: 1px; color: #bbb; }
+
+        /* 用户：居右，黑金视觉 */
+        .user-entry { align-self: flex-end; }
+        .user-entry .log-body { background: #000; color: #fff; border-radius: 20px 20px 2px 20px; font-weight: 800; }
+        .user-entry .log-header { text-align: right; color: #000; }
+
+        /* AI：居左，纸质视觉 */
+        .ai-entry { align-self: flex-start; }
+        .ai-entry .log-body { background: #fff; color: #000; border-radius: 20px 20px 20px 2px; }
+        .ai-entry .log-header { text-align: left; }
+
+        /* --- 输入气泡化 v3.0 --- */
+        .input-wrapper { padding: 25px 30px; border-top: 1px solid #eee; background: #fff; }
+        .input-line { 
+            display: flex; align-items: center; 
+            background: #000; color: #fff; padding: 12px 25px; 
+            border-radius: 30px; border: none; transition: 0.3s;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+        }
+        .prompt-symbol { font-size: 1.1rem; font-weight: 1000; margin-right: 12px; color: #fff; font-family: 'DM Mono', monospace; opacity: 0.7; }
+        #user-input { 
+            flex: 1; background: transparent; border: none; color: #fff; 
+            outline: none; font-size: 1.1rem; font-weight: 700; font-family: inherit; 
+        }
+        #user-input::placeholder { color: rgba(255,255,255,0.4); }
+        #send-btn { background: #fff; color: #000; border: none; padding: 8px 18px; cursor: pointer; font-size: 0.75rem; font-weight: 950; border-radius: 20px; transition: 0.2s; }
+        #send-btn:hover { transform: scale(1.05); background: #eee; }
+        #send-btn:disabled { background: #333; color: #666; cursor: not-allowed; transform: none; }
+        #user-input:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        /* --- SOP 审计流 (v7.5 Ritualized Edition) --- */
+        .step-item { padding: 10px 18px; border-bottom: 1px solid #f2f2f2; display: flex; align-items: center; gap: 8px; font-size: 0.82rem; opacity: 0.15; font-weight: 700; color: #000; transition: 0.4s; position: relative; }
+        
+        /* 齿轮动画 */
+        .step-icon { font-size: 0.7rem; width: 14px; text-align: center; }
+        .fa-gear { display: none; }
+
+        /* 执行中：黑底白字 + 旋转齿轮 */
+        .step-doing { opacity: 1; background: #000 !important; color: #fff !important; }
+        .step-doing .llm-tag { background: #333; color: #fff; }
+        .step-doing .fa-gear { display: inline-block; animation: fa-spin 2s infinite linear; }
+        .step-doing .step-num { display: none; }
+        
+        .step-doing::after { content: ''; position: absolute; right: 0; top: 0; bottom: 0; width: 6px; background: #000; animation: stepPulse 1.5s infinite; }
+        @keyframes stepPulse { 0% { opacity: 0.5; } 50% { opacity: 1; } 100% { opacity: 0.5; } }
+        
+        /* 已完成：重黑边框 */
+        .step-done { opacity: 1; color: #000; border-right: 6px solid #000; background: rgba(0,0,0,0.02); }
+        .step-skip { opacity: 0.4; color: #888; border-right: 6px solid #ddd; background: #f9f9f9; }
+        .step-skip .step-num { text-decoration: line-through; }
+        .step-error { opacity: 1; color: #000; border-right: 6px solid #000; text-decoration: underline; background: rgba(0,0,0,0.05); }
+
+        .step-num { font-family: 'JetBrains Mono'; font-size: 0.75rem; min-width: 18px; }
+        .llm-tag { color: #888; font-size: 0.6rem; font-weight: 900; background: #eee; padding: 2px 4px; border-radius: 2px; text-transform: uppercase; }
+        .step-meta { margin-left: auto; font-family: 'JetBrains Mono', monospace; font-size: 0.72rem; text-align: right; min-width: 140px; line-height: 1.3; }
+        .t-pill { font-size: 0.55rem; color: #666; display: block; border-top: 1px solid #eee; margin-top: 4px; padding-top: 2px; white-space: nowrap; font-weight: 500; }
+        .path-label { font-size: 0.6rem; color: #fff; background: #000; padding: 1px 4px; border-radius: 2px; margin-right: 4px; font-weight: 900; }
+        .reason-box { font-size: 0.6rem; color: #aaa; display: block; max-width: 150px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-transform: uppercase; font-weight: 400; }
+
+        /* --- 上下文 Prompt 审计模块 (下沉优化版) --- */
+        .prompt-audit-panel { flex: 0 100 500px; min-height: 48px; border-top: 8px solid #000; display: flex; flex-direction: column; background: #fff; margin-top: 10px; overflow: hidden; }
+        #prompt-content { flex: 1; padding: 15px; overflow-y: auto; font-family: 'DM Mono', 'Cascadia Code', monospace; font-size: 0.75rem; color: #444; line-height: 1.6; white-space: pre-wrap; background: #fafafa; }
+
+        .resizer { width: 4px; background: #eee; cursor: col-resize; z-index: 100; transition: 0.3s; }
+        .resizer:hover { background: #000; width: 8px; }
+
+        /* --- D3 动力图 --- */
+        .link { stroke: #ddd; stroke-opacity: 0.7; stroke-width: 2px; }
+        .node circle { transition: transform 0.2s; stroke: #fff; stroke-width: 2px; }
+        .node:hover circle { transform: scale(1.4); stroke: #000; stroke-width: 5px; }
+        .node text { fill: #000; font-size: 12px; pointer-events: none; font-weight: 950; opacity: 0.5; }
+    </style>
+</head>
+<body>
+
+<div class="header">
+    <div class="header-brand">
+        <span class="brand-name">Ebbingflow</span>
+        <span class="brand-slash">/</span>
+        <span class="page-title">认知动力实时交互终端</span>
+        <span class="version-tag">V1.0</span>
+    </div>
+    <div class="status-active">
+        <div class="status-dot"></div>
+        <span id="conn-status">CORE_LINK_ACTIVE</span>
+    </div>
+</div>
+
+<div class="workspace">
+    <!-- COL 1: 知识投影 -->
+    <div class="panel col-graph" id="panel-graph">
+        <div class="panel-header">知识动力投影</div>
+        <div id="graph-container">
+            <div id="node-details" class="node-details">
+                <div style="font-weight: 950; margin-bottom: 15px; border-bottom: 4px solid #000; font-size: 1.1rem;">结构化事实分量</div>
+                <div id="detail-id">标识符: -</div>
+                <div id="detail-type">类型: -</div>
+                <div id="detail-impact">权重: -</div>
+            </div>
+            
+            <div id="graph-status-bar" style="
+                position: absolute; bottom: 80px; left: 50%; transform: translateX(-50%);
+                background: rgba(0,0,0,0.8); color: #fff; padding: 10px 25px; 
+                font-size: 0.8rem; font-weight: 900; border-radius: 50px; 
+                display: none; z-index: 1000; letter-spacing: 1px;
+                box-shadow: 0 10px 20px rgba(0,0,0,0.2);
+                border: 2px solid #fff;
+            ">图谱操作中...</div>
+
+            <div class="graph-legend">
+                <div class="legend-item"><div class="dot" style="background: #000; width: 14px; height: 14px;"></div> 实体</div>
+                <div class="legend-item"><div class="dot" style="background: #888; width: 10px; height: 10px;"></div> 谓词</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="resizer" id="resizer-1"></div>
+
+    <!-- COL 2: SOP & PROMPT AUDIT -->
+    <div class="panel col-sop" id="panel-sop">
+        <div class="panel-header">
+            <span>逻辑执行流 (SOP)</span>
+            <span id="sum-tokens" style="font-weight: 950; font-size: 0.7rem;">本轮 In:0 | Out:0 | Total:0T</span>
+        </div>
+        <div id="sop-list" style="flex: 1 1 auto; overflow-y: auto; touch-action: pan-y;">
+            <div id="step-01" class="step-item"><div class="step-icon"><i class="fas fa-gear"></i><span class="step-num">01</span></div><span>感知监听</span><div class="step-meta"></div></div>
+            <div id="step-02" class="step-item"><div class="step-icon"><i class="fas fa-gear"></i><span class="step-num">02</span></div><span>意图解析</span><span class="llm-tag">[LLM]</span><div class="step-meta"></div></div>
+            <div id="step-03" class="step-item"><div class="step-icon"><i class="fas fa-gear"></i><span class="step-num">03</span></div><span>身份透视</span><span class="llm-tag">[EMB]</span><div class="step-meta"></div></div>
+            <div id="step-04" class="step-item"><div class="step-icon"><i class="fas fa-gear"></i><span class="step-num">04</span></div><span>图谱检索</span><span class="llm-tag">[EMB]</span><div class="step-meta"></div></div>
+            <div id="step-05" class="step-item"><div class="step-icon"><i class="fas fa-gear"></i><span class="step-num">05</span></div><span>向量召回</span><span class="llm-tag">[EMB]</span><div class="step-meta"></div></div>
+            <div id="step-06" class="step-item"><div class="step-icon"><i class="fas fa-gear"></i><span class="step-num">06</span></div><span>动态提示词</span><div class="step-meta"></div></div>
+            <div id="step-07" class="step-item"><div class="step-icon"><i class="fas fa-gear"></i><span class="step-num">07</span></div><span>核心推理</span><span class="llm-tag">[LLM]</span><div class="step-meta"></div></div>
+            <div id="step-08" class="step-item"><div class="step-icon"><i class="fas fa-gear"></i><span class="step-num">08</span></div><span>事实提取</span><span class="llm-tag">[LLM]</span><div class="step-meta"></div></div>
+            <div id="step-09" class="step-item"><div class="step-icon"><i class="fas fa-gear"></i><span class="step-num">09</span></div><span>知识脱水</span><span class="llm-tag">[LLM]</span><div class="step-meta"></div></div>
+            <div id="step-10" class="step-item"><div class="step-icon"><i class="fas fa-gear"></i><span class="step-num">10</span></div><span>事实校验</span><span class="llm-tag">[LLM]</span><div class="step-meta"></div></div>
+            <div id="step-11" class="step-item"><div class="step-icon"><i class="fas fa-gear"></i><span class="step-num">11</span></div><span>存储更新</span><div class="step-meta"></div></div>
+            <div id="step-12" class="step-item"><div class="step-icon"><i class="fas fa-gear"></i><span class="step-num">12</span></div><span>上下文同步</span><div class="step-meta"></div></div>
+            <div id="step-13" class="step-item"><div class="step-icon"><i class="fas fa-gear"></i><span class="step-num">13</span></div><span>审计结算</span><div class="step-meta"></div></div>
+            <div id="step-14" class="step-item"><div class="step-icon"><i class="fas fa-gear"></i><span class="step-num">14</span></div><span>人格重判</span><span class="llm-tag">[LLM]</span><div class="step-meta"></div></div>
+        </div>
+
+        <div class="prompt-audit-panel">
+            <div class="panel-header">上下文 PROMPT 深度审计</div>
+            <div id="prompt-content" style="color: #000; font-weight: 500;">[READY] WAITING_FOR_SIGNAL...</div>
+        </div>
+    </div>
+
+    <div class="resizer" id="resizer-2"></div>
+
+    <!-- COL 3: 通讯日志 -->
+    <div class="panel col-chat" id="panel-chat">
+        <div class="panel-header">实时通讯日志</div>
+        <div id="chat-messages"></div>
+        <div class="input-wrapper">
+            <div class="input-line">
+                <span class="prompt-symbol">SQL></span>
+                <input type="text" id="user-input" placeholder="输入指令...">
+                <button id="send-btn">上传</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<script>
+    const chatBox = document.getElementById('chat-messages');
+    const inputEl = document.getElementById('user-input');
+    const sendBtn = document.getElementById('send-btn');
+    const detailBox = document.getElementById('node-details');
+    const promptBox = document.getElementById('prompt-content');
+    let turnTokenIn = 0;
+    let turnTokenOut = 0;
+    let turnTokenTotal = 0;
+    let prevTokenIn = 0;
+    let prevTokenOut = 0;
+    let prevTokenTotal = 0;
+
+    function updateTurnTokenHeader() {
+        document.getElementById('sum-tokens').innerText =
+            `本轮 In:${turnTokenIn} | Out:${turnTokenOut} | Total:${turnTokenTotal}T`;
+    }
+
+    function getStepTokenDelta(tin, tout, ttotal) {
+        // If counters go backwards (reconnect/reset), restart step baseline.
+        if (tin < prevTokenIn || tout < prevTokenOut || ttotal < prevTokenTotal) {
+            prevTokenIn = 0;
+            prevTokenOut = 0;
+            prevTokenTotal = 0;
+        }
+        const din = Math.max(0, tin - prevTokenIn);
+        const dout = Math.max(0, tout - prevTokenOut);
+        const dtotal = Math.max(0, ttotal - prevTokenTotal);
+        prevTokenIn = tin;
+        prevTokenOut = tout;
+        prevTokenTotal = ttotal;
+        return { din, dout, dtotal };
+    }
+
+    function setLock(locked) {
+        sendBtn.disabled = locked;
+        sendBtn.innerText = locked ? '解析中' : '上传';
+        // 视觉反馈：仅按钮变暗，输入框保持活跃
+        sendBtn.style.opacity = locked ? '0.5' : '1';
+    }
+
+    let currentAsstName = 'Andrew';
+    const nodes = [], links = [];
+    const width = 800, height = 800;
+    const svg = d3.select("#graph-container").append("svg")
+        .attr("width", "100%").attr("height", "100%")
+        .attr("viewBox", `0 0 ${width} ${height}`)
+        .call(d3.zoom().scaleExtent([0.1, 15]).on("zoom", (e) => gMain.attr("transform", e.transform)));
+
+    const gMain = svg.append("g");
+    const simulation = d3.forceSimulation(nodes)
+        .force("link", d3.forceLink(links).id(d => d.id).distance(80))
+        .force("charge", d3.forceManyBody().strength(-900))
+        .force("center", d3.forceCenter(width / 2, height / 2));
+
+    function updateGraph(newData) {
+        if (!newData.graph_all) return;
+        newData.graph_all.forEach(fact => {
+            const sub = fact.sub, pre = fact.pre, obj = fact.obj, pre_short = fact.predicate;
+            const link_props = fact.props || {};
+            const ent_meta = newData.ent_meta || {};
+            
+            // 提取实体全量属性 (如果存在)
+            const sub_props = Object.assign({}, link_props, ent_meta[sub] || {});
+            const obj_props = Object.assign({}, link_props, ent_meta[obj] || {});
+
+            if (sub && !nodes.find(n => n.id === sub)) nodes.push({id: sub, name: sub, type: '实体', props: sub_props});
+            
+            // 谓词节点保存其原本属性 (Link Props)
+            if (pre && !nodes.find(n => n.id === pre)) nodes.push({id: pre, name: pre_short, type: '谓词', props: link_props});
+            
+            if (obj && !nodes.find(n => n.id === obj)) nodes.push({id: obj, name: obj, type: '实体', props: obj_props});
+            
+            if (sub && pre && !links.find(l => l.source === sub && l.target === pre)) links.push({source: sub, target: pre});
+            if (pre && obj && !links.find(l => l.source === pre && l.target === obj)) links.push({source: pre, target: obj});
+        });
+
+        const link = gMain.selectAll(".link").data(links, d => (d.source.id || d.source) + "-" + (d.target.id || d.target))
+            .join("line").attr("class", "link");
+
+        const node = gMain.selectAll(".node").data(nodes, d => d.id)
+            .join("g").attr("class", "node")
+            .on("click", (e, d) => {
+                detailBox.style.display = 'block';
+                // 动态生成所有属性列表（类似 Neo4j）
+                let html = `<div style="font-weight: 950; margin-bottom: 12px; border-bottom: 4px solid #000; font-size: 1.1rem; padding-bottom:5px;">属性详情: ${d.name}</div>`;
+                
+                // 基础系统属性
+                html += `<div style="margin-bottom:8px;"><strong style="font-size:0.7rem; color:#888;">INTERNAL_ID</strong><br>${d.id}</div>`;
+                html += `<div style="margin-bottom:8px;"><strong style="font-size:0.7rem; color:#888;">LOGIC_TYPE</strong><br>${d.type}</div>`;
+                
+                // 动态属性渲染
+                if (d.props) {
+                    Object.entries(d.props).forEach(([key, value]) => {
+                        if (key === 'id' || key === 'name') return; // 跳过重复项
+                        html += `<div style="margin-bottom:8px;"><strong style="font-size:0.7rem; color:#888; text-transform:uppercase;">${key}</strong><br>${value}</div>`;
+                    });
+                }
+                
+                detailBox.innerHTML = html;
+                e.stopPropagation();
+            })
+            .call(d3.drag().on("start", dragstarted).on("drag", dragged).on("end", dragended));
+
+        node.selectAll("circle").data(d => [d]).join("circle")
+            .attr("r", d => d.type === '实体' ? 12 : 7)
+            .attr("fill", d => (d.id === 'user_shen' || d.name === currentAsstName) ? '#000' : (d.type === '实体' ? '#000' : '#888'))
+            .attr("stroke", "#000").attr("stroke-width", 2);
+
+        node.selectAll("text").data(d => [d]).join("text")
+            .attr("x", 18).attr("y", 6)
+            .text(d => d.name); // 强制更新文字
+
+        simulation.nodes(nodes); simulation.force("link").links(links);
+        simulation.alpha(0.3).restart();
+
+        simulation.on("tick", () => {
+            link.attr("x1", d => d.source.x).attr("y1", d => d.source.y)
+                .attr("x2", d => d.target.x).attr("y2", d => d.target.y);
+            node.attr("transform", d => `translate(${d.x},${d.y})`);
+        });
+    }
+
+    svg.on("click", () => { detailBox.style.display = 'none'; });
+    function dragstarted(e, d) { if (!e.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; }
+    function dragged(e, d) { d.fx = e.x; d.fy = e.y; }
+    function dragended(e, d) { if (!e.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; }
+
+    const ws = new WebSocket("ws://localhost:8000/ws");
+    let aiBody = null;
+
+    ws.onmessage = (e) => {
+        const d = JSON.parse(e.data);
+        if (d.type === 'chunk') {
+            if (!aiBody) {
+                const entry = document.createElement('div');
+                entry.className = 'log-entry ai-entry';
+                entry.innerHTML = `<div class="log-header">来自 ${currentAsstName} 的通讯回执</div><div class="log-body"></div>`;
+                chatBox.appendChild(entry);
+                aiBody = entry.querySelector('.log-body');
+            }
+            aiBody.innerText += d.text;
+            chatBox.scrollTop = chatBox.scrollHeight;
+        } else if (d.type === 'status') {
+            const statusBar = document.getElementById('graph-status-bar');
+            if(d.status === 'doing') {
+                const stepNames = {"04": "图谱检索中...", "07": "执行核心推理...", "08": "事实抽取及校验...", "11": "数据库提交..."};
+                if(stepNames[d.step]) {
+                    statusBar.innerText = stepNames[d.step];
+                    statusBar.style.display = 'block';
+                }
+            } else {
+                statusBar.style.display = 'none';
+            }
+
+            const stepId = 'step-' + d.step;
+            const row = document.getElementById(stepId);
+            if(row) {
+                const currentState = row.getAttribute('data-state');
+                const finalStates = ['done', 'skip', 'error'];
+                if (finalStates.includes(currentState) && d.status === 'doing') return;
+
+                row.className = 'step-item step-' + d.status;
+                row.setAttribute('data-state', d.status);
+                const metaBox = row.querySelector('.step-meta');
+                
+                // 处理计时器逻辑
+                if (!window.stepTimers) window.stepTimers = {};
+                if (window.stepTimers[d.step]) {
+                    clearInterval(window.stepTimers[d.step].interval);
+                }
+
+                if (d.status === 'doing') {
+                    const startTime = Date.now();
+                    window.stepTimers[d.step] = {
+                        start: startTime,
+                        interval: setInterval(() => {
+                            const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+                            metaBox.innerHTML = `<span style="opacity: 0.6; font-family: 'DM Mono';">PROCESS (${elapsed}s)...</span>`;
+                        }, 100)
+                    };
+                } else {
+                    // 状态结束 (done/skip/error)
+                    let metaHtml = '';
+                    
+                    // 即便是 0ms 也要显示为 0.00s 甚至以示诚实
+                    let finalTime = '0.00s';
+                    if (d.status === 'skip') {
+                        finalTime = 'SKIP';
+                    } else if (d.time_ms !== undefined && d.time_ms !== null) {
+                        // 统一转换为秒显示
+                        finalTime = `${(d.time_ms / 1000).toFixed(2)}s`;
+                    } else if (window.stepTimers[d.step]) {
+                        const elapsed = ((Date.now() - window.stepTimers[d.step].start) / 1000).toFixed(2);
+                        finalTime = `${elapsed}s`;
+                    }
+                    
+                    const timeColor = d.status === 'skip' ? '#bbb' : '#000';
+                    metaHtml += `<span style="font-weight: 900; color: ${timeColor};">${finalTime}</span>`;
+                    
+                    if (d.path && d.path !== 'none' && d.path !== 'normal') metaHtml += `<span class="path-label">${d.path.toUpperCase()}</span>`;
+                    if (d.reason) metaHtml += `<div class="reason-box" title="${d.reason}">${d.reason}</div>`;
+                    
+                    // Token 深度审计
+                    if (d.tokens_in !== undefined || d.tokens_out !== undefined || d.tokens_total !== undefined) {
+                        const tin = Number(d.tokens_in || 0);
+                        const tout = Number(d.tokens_out || 0);
+                        const ttotal = Number(
+                            d.tokens_total !== undefined ? d.tokens_total : (tin + tout)
+                        );
+                        const delta = getStepTokenDelta(tin, tout, ttotal);
+                        turnTokenIn = tin;
+                        turnTokenOut = tout;
+                        turnTokenTotal = ttotal;
+                        updateTurnTokenHeader();
+                        
+                        metaHtml += `<div class="t-pill">
+                            <span style="opacity:0.5">I:</span>${delta.din} 
+                            <span style="opacity:0.5">O:</span>${delta.dout} 
+                            <span style="opacity:0.5">T:</span>${delta.dtotal}
+                        </div>`;
+                    }
+                    metaBox.innerHTML = metaHtml;
+                }
+
+                // 重点：如果第13步（审计结算）完成，则解除锁定
+                if (d.step === '14' && ['done', 'skip', 'error'].includes(d.status)) {
+                    setLock(false);
+                }
+            }
+            if(d.prompt) {
+                promptBox.innerHTML = `<div style="color: #000; font-weight: 800; margin-bottom: 5px; border-bottom: 1px solid #ddd; padding-bottom: 4px;">[SYSTEM_PROMPT_VERSION_SYNCED]</div>` + d.prompt;
+                promptBox.scrollTop = 0; 
+            }
+        } else if (d.type === 'global_sync') { 
+            if (d.asst_name) currentAsstName = d.asst_name;
+            updateGraph(d); 
+            if (d.history && d.history.length > 0) {
+                // 清空并重新渲染历史
+                chatBox.innerHTML = '';
+                d.history.forEach(msg => {
+                    const entry = document.createElement('div');
+                    const isUser = msg.role === 'user';
+                    entry.className = `log-entry ${isUser ? 'user-entry' : 'ai-entry'}`;
+                    const header = isUser ? '神之上传' : `来自 ${currentAsstName} 的通讯回执`;
+                    entry.innerHTML = `<div class="log-header">${header}</div><div class="log-body">${msg.content.replace(/\n/g, "<br>")}</div>`;
+                    chatBox.appendChild(entry);
+                });
+                chatBox.scrollTop = chatBox.scrollHeight;
+            }
+        }
+    };
+
+    ws.onclose = () => { setLock(false); };
+    ws.onerror = () => { setLock(false); };
+
+    function send() {
+        if (sendBtn.disabled) return;
+        const val = inputEl.value.trim(); if(!val) return;
+        setLock(true);
+        aiBody = null; 
+        
+        // 重置 Token 审计与计时清理
+        turnTokenIn = 0;
+        turnTokenOut = 0;
+        turnTokenTotal = 0;
+        prevTokenIn = 0;
+        prevTokenOut = 0;
+        prevTokenTotal = 0;
+        updateTurnTokenHeader();
+        if (window.stepTimers) {
+            Object.values(window.stepTimers).forEach(t => {
+                if (t.interval) clearInterval(t.interval);
+            });
+            window.stepTimers = {};
+        }
+
+        promptBox.innerHTML = `<div style='color:#aaa'>（正在监听 ${currentAsstName} 的认知组装...）</div>`;
+        // SOP 重置逻辑 (V3 Monochrome)
+        document.querySelectorAll('.step-item').forEach(r => { 
+            r.className = 'step-item'; 
+            r.removeAttribute('data-state');
+            r.querySelector('.step-meta').innerHTML = ''; 
+        });
+        const entry = document.createElement('div');
+        entry.className = 'log-entry user-entry';
+        entry.innerHTML = `<div class="log-header">神之上传</div><div class="log-body">${val}</div>`;
+        chatBox.appendChild(entry);
+        ws.send(JSON.stringify({text: val})); inputEl.value = '';
+        chatBox.scrollTop = chatBox.scrollHeight;
+    }
+    sendBtn.onclick = send;
+    inputEl.onkeydown = (e) => { if(e.key==='Enter') send(); };
+
+    const panelGraph = document.getElementById('panel-graph');
+    const panelSop = document.getElementById('panel-sop');
+    const r1 = document.getElementById('resizer-1');
+    const r2 = document.getElementById('resizer-2');
+
+    r1.onmousedown = (e) => {
+        document.onmousemove = (m) => { 
+            panelGraph.style.width = m.clientX + 'px'; 
+            panelGraph.style.flex = "none";
+        };
+        document.onmouseup = () => { document.onmousemove = null; };
+    };
+
+    r2.onmousedown = (e) => {
+        document.onmousemove = (m) => { 
+            const newWidth = m.clientX - panelGraph.offsetWidth - 4;
+            panelSop.style.width = newWidth + 'px';
+            panelSop.style.flex = "none";
+        };
+        document.onmouseup = () => { document.onmousemove = null; };
+    };
+</script>
+</body>
+</html>

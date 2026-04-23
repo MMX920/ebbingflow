@@ -1,0 +1,67 @@
+{
+  "seed": 42,
+  "user_id": "saga_tester_release",
+  "sessions": [
+    {
+      "session_id": "m2saga_session_A",
+      "topic": "DeepThink Lab",
+      "turns": [
+        ["We started DeepThink Lab architecture planning.", "Captured."],
+        ["We need server procurement for DeepThink Lab.", "Captured."],
+        ["We added security hardening for DeepThink Lab.", "Captured."],
+        ["Core DeepThink Lab team list is finalized.", "Captured."],
+        ["Angel funding arrived for DeepThink Lab.", "Captured."]
+      ]
+    },
+    {
+      "session_id": "m2saga_session_B",
+      "topic": "DeepThink Lab",
+      "turns": [
+        ["DeepThink Lab now adds three regional nodes.", "Captured."],
+        ["Hiring more architects for DeepThink Lab.", "Captured."],
+        ["DeepThink Lab is applying patents.", "Captured."],
+        ["DeepThink Lab logo selected in blue.", "Captured."],
+        ["DeepThink Lab passed mid-term review.", "Captured."]
+      ]
+    },
+    {
+      "session_id": "m2saga_session_old",
+      "topic": "EbbingFlow Book",
+      "timestamp_mode": "old_60d",
+      "turns": [
+        ["I will write an EbbingFlow design book.", "Captured."],
+        ["Chapter 1 draft completed for the EbbingFlow book.", "Captured."],
+        ["Chapter 2 covers RAG in the EbbingFlow book.", "Captured."],
+        ["Chapter 3 covers Neo4j in the EbbingFlow book.", "Captured."],
+        ["Publisher is confirmed for the EbbingFlow book.", "Captured."]
+      ]
+    },
+    {
+      "session_id": "m2saga_session_now",
+      "topic": "EbbingFlow Book",
+      "turns": [
+        ["I started chapter 4 for the EbbingFlow book.", "Captured."],
+        ["This chapter focuses on Saga patterns.", "Captured."],
+        ["Add charts to the EbbingFlow book chapter.", "Captured."],
+        ["The EbbingFlow book cover draft is ready.", "Captured."],
+        ["The EbbingFlow full draft passed first review.", "Captured."]
+      ]
+    },
+    {
+      "session_id": "m2saga_session_chem",
+      "topic": "Chemistry Lab",
+      "turns": [
+        ["I ran a chemistry lab experiment today.", "Captured."],
+        ["Prepared chemistry lab reagents.", "Captured."],
+        ["Prepared chemistry lab test tubes.", "Captured."],
+        ["The chemistry lab experiment succeeded.", "Captured."],
+        ["I wrote a chemistry lab report.", "Captured."]
+      ]
+    }
+  ],
+  "queries": [
+    {"query": "DeepThink Lab", "expected_saga": "DeepThink Lab"},
+    {"query": "EbbingFlow Book", "expected_saga": "EbbingFlow Book"},
+    {"query": "Chemistry Lab", "expected_saga": "Chemistry Lab"}
+  ]
+}

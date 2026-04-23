@@ -1,0 +1,33 @@
+# EbbingFlow 项目忽略文件
+
+# 虚拟环境
+venv/
+.venv/
+env/
+
+# 环境变量（含密码，不提交）
+.env
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# 本地数据库
+*.db
+chroma_db/
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+
+# 日志
+*.log
+logs/
+
+# Local runtime data
+.data/
+tmp/

@@ -1,0 +1,10 @@
+{
+  "owner_id": "saga_tester_release",
+  "mismerge_rate": 0.0,
+  "miss_recall_rate": 0.0,
+  "thresholds": {
+    "mismerge_rate_max": 0.05,
+    "miss_recall_rate_max": 0.05
+  },
+  "passed": true
+}
