@@ -17,12 +17,12 @@ except ImportError:
 
 class ChatMessage:
     """单条聊天消息"""
-    def __init__(self, role: str, content: str, name: Optional[str] = None, msg_id: Optional[int] = None):
+    def __init__(self, role: str, content: str, name: Optional[str] = None, msg_id: Optional[int] = None, timestamp: Optional[str] = None):
         self.role = role
         self.content = content
         self.name = name  # 可选：记录确切的 Entity Name
         self.msg_id = msg_id # 从数据库中获取的自增 ID (用于证据链)
-        self.timestamp = datetime.now().isoformat()
+        self.timestamp = timestamp or datetime.now().isoformat()
 
     def to_dict(self) -> Dict[str, Any]:
         msg = {
@@ -109,20 +109,19 @@ class ChatSession:
         for item in history_data:
             # 支持从 SQL 或 Chroma 返回的字典中提取 ID
             msg_id = item.get("id") or item.get("msg_id") 
-            m = ChatMessage(item["role"], item["content"], item.get("name"), msg_id=msg_id)
-            m.timestamp = item.get("timestamp")
+            m = ChatMessage(item["role"], item["content"], item.get("name"), msg_id=msg_id, timestamp=item.get("timestamp"))
             self.history.append(m)
         if self.history:
             print(f"[Session] Restored {len(self.history)} history records from SQL")
 
-    def add_user_message(self, content: str, name: Optional[str] = None) -> ChatMessage:
-        msg = ChatMessage(role="user", content=content, name=name or self.user_id)
+    def add_user_message(self, content: str, name: Optional[str] = None, timestamp: Optional[str] = None) -> ChatMessage:
+        msg = ChatMessage(role="user", content=content, name=name or self.user_id, timestamp=timestamp)
         if self.history_repo:
             try:
                 # [M1] Persist immediately to get SQL ID for Evidence Chain
                 msg_id = self.history_repo.append_turn(
                     user_id=self.user_id, session_id=self.session_id,
-                    role="user", speaker=name or self.user_id, content=content
+                    role="user", speaker=name or self.user_id, content=content, timestamp=timestamp
                 )
                 msg.msg_id = msg_id
             except Exception as e:
@@ -131,14 +130,14 @@ class ChatSession:
         self.history.append(msg)
         return msg
 
-    def add_assistant_message(self, content: str, name: Optional[str] = None) -> ChatMessage:
-        msg = ChatMessage(role="assistant", content=content, name=name)
+    def add_assistant_message(self, content: str, name: Optional[str] = None, timestamp: Optional[str] = None) -> ChatMessage:
+        msg = ChatMessage(role="assistant", content=content, name=name, timestamp=timestamp)
         if self.history_repo:
             try:
                 # [M1] Persist immediately to get SQL ID for Evidence Chain
                 msg_id = self.history_repo.append_turn(
                     user_id=self.user_id, session_id=self.session_id,
-                    role="assistant", speaker="assistant", content=content
+                    role="assistant", speaker="assistant", content=content, timestamp=timestamp
                 )
                 msg.msg_id = msg_id
             except Exception as e:

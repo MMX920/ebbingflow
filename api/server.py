@@ -4,6 +4,10 @@ import asyncio
 import time
 import json
 import secrets
+import gc
+import shutil
+import tempfile
+import zipfile
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException
 from fastapi.responses import FileResponse
 import uvicorn
@@ -39,11 +43,255 @@ global_db_driver = None
 checkpoint_manager = None
 crm_audit_cache = []
 crm_replay_stats = {"processed": 0, "skipped": 0, "failed": 0}
+restore_demo_lock = asyncio.Lock()
+runtime_restore_in_progress = False
+
+DEMO_BACKUP_REQUIRED_FILES = [
+    "neo4j_snapshot.json",
+    os.path.join(".data_fs", "ef_history.db"),
+    os.path.join(".data_fs", "cdc_outbox.db"),
+    os.path.join(".data_fs", "cdc_checkpoint.db"),
+    os.path.join(".data_fs", "chroma", "chroma.sqlite3"),
+]
 
 # Temporal Audit Configuration
 INCLUDE_INVALIDATED = False
 INFERENCE_MIN_EVIDENCE = int(os.getenv("INFERENCE_MIN_EVIDENCE", "3"))
 INFERENCE_AUTO_INTERVAL = max(1, int(os.getenv("INFERENCE_AUTO_INTERVAL", "6")))
+
+
+def _quote_cypher_name(name: str) -> str:
+    """Quote a label/type from trusted backup data for dynamic Cypher."""
+    clean = str(name or "").replace("`", "``")
+    return f"`{clean}`"
+
+
+def _missing_demo_backup_files(backup_dir: str) -> list[str]:
+    return [
+        os.path.join(backup_dir, rel_path)
+        for rel_path in DEMO_BACKUP_REQUIRED_FILES
+        if not os.path.exists(os.path.join(backup_dir, rel_path))
+    ]
+
+
+def _safe_extract_zip(zip_path: str, destination: str):
+    dest_abs = os.path.abspath(destination)
+    with zipfile.ZipFile(zip_path, "r") as archive:
+        for member in archive.infolist():
+            target = os.path.abspath(os.path.join(destination, member.filename))
+            if target != dest_abs and not target.startswith(dest_abs + os.sep):
+                raise ValueError(f"Unsafe path in demo backup zip: {member.filename}")
+        archive.extractall(destination)
+
+
+def _find_demo_backup_dir(root: str) -> str:
+    if not _missing_demo_backup_files(root):
+        return root
+
+    for current, dirs, _files in os.walk(root):
+        dirs[:] = [d for d in dirs if d not in {"__pycache__"}]
+        if not _missing_demo_backup_files(current):
+            return current
+
+    raise FileNotFoundError("Demo backup zip does not contain the required snapshot layout.")
+
+
+async def _close_runtime_handles_for_restore():
+    """Release in-process handles before replacing Windows-locked SQLite files."""
+    global engine, session, global_db_driver, checkpoint_manager
+
+    old_session = session
+    session = None
+    engine = None
+
+    if old_session is not None:
+        history_repo = getattr(old_session, "history_repo", None)
+        storer = getattr(history_repo, "_storer", None)
+        client = getattr(storer, "client", None)
+        close = getattr(client, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception as exc:
+                logger.debug("[DemoRestore] Chroma client close skipped: %s", exc)
+
+    if checkpoint_manager is not None:
+        try:
+            checkpoint_manager.close()
+        except Exception as exc:
+            logger.debug("[DemoRestore] checkpoint close skipped: %s", exc)
+        checkpoint_manager = None
+
+    if global_db_driver is not None:
+        try:
+            await global_db_driver.close()
+        except Exception as exc:
+            logger.debug("[DemoRestore] Neo4j driver close skipped: %s", exc)
+        global_db_driver = None
+
+    try:
+        from memory.sql.pool import close_pool
+        await close_pool()
+    except Exception as exc:
+        logger.debug("[DemoRestore] SQL pool close skipped: %s", exc)
+
+    try:
+        from chromadb.api.shared_system_client import SharedSystemClient
+        systems = list(SharedSystemClient._identifier_to_system.values())
+        for chroma_system in systems:
+            try:
+                chroma_system.stop()
+            except Exception as exc:
+                logger.debug("[DemoRestore] Chroma shared system stop skipped: %s", exc)
+        SharedSystemClient.clear_system_cache()
+    except Exception as exc:
+        logger.debug("[DemoRestore] Chroma shared cache clear skipped: %s", exc)
+
+    gc.collect()
+    await asyncio.sleep(0.25)
+
+
+async def _close_active_websockets_for_restore():
+    connections = list(globals().get("active_connections", set()))
+    for ws in connections:
+        try:
+            if (
+                ws.client_state == WebSocketState.CONNECTED
+                and ws.application_state == WebSocketState.CONNECTED
+            ):
+                await ws.close(code=1012, reason="demo data restore")
+        except Exception as exc:
+            logger.debug("[DemoRestore] websocket close skipped: %s", exc)
+        finally:
+            _drop_connection(ws)
+
+
+async def _restore_neo4j_snapshot(backup_dir: str) -> tuple[int, int]:
+    snapshot_path = os.path.join(backup_dir, "neo4j_snapshot.json")
+    if not os.path.exists(snapshot_path):
+        raise FileNotFoundError(f"Missing Neo4j snapshot: {snapshot_path}")
+
+    with open(snapshot_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    driver = AsyncGraphDatabase.driver(
+        neo4j_config.uri,
+        auth=(neo4j_config.username, neo4j_config.password),
+    )
+    try:
+        async with driver.session(database=neo4j_config.database) as db:
+            delete_result = await db.run("MATCH (n) DETACH DELETE n")
+            await delete_result.consume()
+
+            id_map = {}
+            nodes_by_labels = {}
+            for raw_node in data.get("nodes", []):
+                node = dict(raw_node)
+                old_eid = node.pop("__eid__", None)
+                labels = tuple(sorted(node.pop("__labels__", ["Entity"]) or ["Entity"]))
+                nodes_by_labels.setdefault(labels, []).append({"old_eid": old_eid, "props": node})
+
+            for labels, node_list in nodes_by_labels.items():
+                label_str = ":".join(_quote_cypher_name(label) for label in labels)
+                query = (
+                    f"UNWIND $batch AS item "
+                    f"CREATE (n:{label_str}) SET n = item.props "
+                    f"RETURN item.old_eid AS old, elementId(n) AS new"
+                )
+                res = await db.run(query, batch=node_list)
+                async for record in res:
+                    if record["old"]:
+                        id_map[record["old"]] = record["new"]
+
+            rels_by_type = {}
+            for rel in data.get("rels", []):
+                a_new = id_map.get(rel.get("a_eid") or rel.get("a_id"))
+                b_new = id_map.get(rel.get("b_eid") or rel.get("b_id"))
+                rtype = rel.get("rel_type")
+                if a_new and b_new and rtype:
+                    rels_by_type.setdefault(rtype, []).append({
+                        "a": a_new,
+                        "b": b_new,
+                        "p": rel.get("rel_props") or {},
+                    })
+
+            for rtype, rel_list in rels_by_type.items():
+                quoted_type = _quote_cypher_name(rtype)
+                for i in range(0, len(rel_list), 5000):
+                    batch = rel_list[i:i + 5000]
+                    rel_result = await db.run(
+                        f"""
+                        UNWIND $batch AS r
+                        MATCH (a), (b)
+                        WHERE elementId(a) = r.a AND elementId(b) = r.b
+                        CREATE (a)-[rel:{quoted_type}]->(b)
+                        SET rel = r.p
+                        """,
+                        batch=batch,
+                    )
+                    await rel_result.consume()
+        return len(data.get("nodes", [])), len(data.get("rels", []))
+    finally:
+        await driver.close()
+
+
+def _restore_demo_data_files(backup_dir: str):
+    src = os.path.join(backup_dir, ".data_fs")
+    dst = os.path.join(BASE_DIR, ".data")
+    if not os.path.isdir(src):
+        raise FileNotFoundError(f"Missing local data snapshot: {src}")
+
+    for attempt in range(1, 6):
+        try:
+            if os.path.exists(dst):
+                shutil.rmtree(dst)
+            shutil.copytree(src, dst)
+            return
+        except PermissionError:
+            gc.collect()
+            time.sleep(0.4 * attempt)
+            if attempt == 5:
+                raise
+
+
+async def _initialize_runtime_after_restore():
+    global engine, session, global_db_driver, checkpoint_manager
+
+    engine = get_standard_engine()
+    backend = identity_config.chat_history_backend
+    if backend == "sql":
+        from scripts.setup_db import setup_db
+        await setup_db()
+        from memory.history.repository import SqlHistoryRepository
+        history_repo = SqlHistoryRepository()
+    else:
+        from memory.history.repository import ChromaHistoryRepository
+        history_repo = ChromaHistoryRepository()
+
+    session = ChatSession(
+        session_id="master_session",
+        user_id=identity_config.user_id,
+        history_repo=history_repo,
+    )
+    await session.restore_from_repo()
+
+    global_db_driver = AsyncGraphDatabase.driver(
+        neo4j_config.uri,
+        auth=(neo4j_config.username, neo4j_config.password),
+    )
+    checkpoint_manager = CDCCheckpointManager()
+
+    try:
+        from memory.vector.storer import VectorStorer
+        v_storer = VectorStorer()
+        session.context_canvas["vector_status"] = "active"
+        session.context_canvas["vector_chat_count"] = v_storer.get_chat_count()
+        close = getattr(getattr(v_storer, "client", None), "close", None)
+        if callable(close):
+            close()
+    except Exception as exc:
+        logger.warning("[DemoRestore] Vector reinitialization degraded: %s", exc)
+        session.context_canvas["vector_status"] = "degraded"
 
 def clean_neo4j_data(obj):
     if isinstance(obj, list):
@@ -110,6 +358,13 @@ def _is_maintenance_authorized(request: Request) -> bool:
     if not expected:
         expected = str(getattr(server_config, "ws_auth_token", "") or "").strip()
     if not expected:
+        client_host = str(getattr(getattr(request, "client", None), "host", "") or "").strip()
+        if (
+            not getattr(server_config, "ws_auth_required", False)
+            and client_host in {"127.0.0.1", "::1", "localhost"}
+        ):
+            logger.warning("[MAINTENANCE_AUTH] No token configured; allowing loopback request because WS_AUTH_REQUIRED=false.")
+            return True
         logger.error("[MAINTENANCE_AUTH] Missing MAINTENANCE_TOKEN/WS_AUTH_TOKEN. Denying request.")
         return False
 
@@ -373,6 +628,61 @@ async def _load_recent_user_dialogue_from_sql(uid: str, max_turns: int = 12, max
         logger.debug("[IdentityInference] SQL dialogue load skipped: %s", e)
         return []
 
+
+async def _load_monitor_dialogue_stream(uid: str, limit: int = 1200) -> list[dict]:
+    """Load monitor dialogue history directly from SQL across sessions."""
+    try:
+        from memory.sql.pool import get_db
+        async with get_db() as conn:
+            is_sqlite = "sqlite" in str(type(conn)).lower()
+            if is_sqlite:
+                sql = """
+                SELECT m.id, m.role, m.speaker AS name, m.content, m.timestamp, m.session_id
+                FROM ef_chat_messages m
+                JOIN ef_chat_sessions s ON s.session_id = m.session_id
+                WHERE s.user_id = ?
+                ORDER BY m.id DESC
+                LIMIT ?
+                """
+                cursor = await conn.execute(sql, (uid, limit))
+                rows = await cursor.fetchall()
+            else:
+                sql = """
+                SELECT m.id, m.role, m.speaker AS name, m.content, m.timestamp, m.session_id
+                FROM ef_chat_messages m
+                JOIN ef_chat_sessions s ON s.session_id = m.session_id
+                WHERE s.user_id = $1
+                ORDER BY m.id DESC
+                LIMIT $2
+                """
+                rows = await conn.fetch(sql, uid, limit)
+        history = []
+        for row in reversed(rows or []):
+            item = dict(row)
+            history.append({
+                "role": item.get("role"),
+                "content": item.get("content"),
+                "timestamp": item.get("timestamp"),
+                "name": item.get("name"),
+                "msg_id": item.get("id"),
+                "session_id": item.get("session_id"),
+            })
+        return history
+    except Exception as e:
+        logger.debug("[Monitor] SQL dialogue stream load skipped: %s", e)
+        return []
+
+
+def _session_history_payload() -> list[dict]:
+    return [
+        msg.to_dict()
+        for msg in session.history
+        if not (
+            getattr(msg, "role", None) == "assistant"
+            and _is_transient_ai_error_message(getattr(msg, "content", ""))
+        )
+    ]
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global engine, session, global_db_driver
@@ -573,6 +883,17 @@ async def websocket_endpoint(websocket: WebSocket):
         return
     
     async def sync_all():
+        if runtime_restore_in_progress:
+            if (
+                websocket.client_state == WebSocketState.CONNECTED
+                and websocket.application_state == WebSocketState.CONNECTED
+            ):
+                await websocket.send_json({
+                    "type": "maintenance",
+                    "status": "restoring_demo_data",
+                    "message": "Demo data restore in progress.",
+                })
+            return
         if not global_db_driver: return
         if (
             websocket.client_state != WebSocketState.CONNECTED
@@ -1160,6 +1481,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     confidence=0.78,
                     source="profile_graph",
                 )
+            monitor_history = await _load_monitor_dialogue_stream(identity_config.user_id)
             payload = clean_neo4j_data({
                 "type": "global_sync", 
                 "profile_protocol_version": 2, 
@@ -1202,14 +1524,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 },
                 "time_window_audit": (session.context_canvas.get("retrieval_audit") or {}).get("latency_ms", {}).get("time_window", {"enabled": False}),
                 "resolution_audit": session.context_canvas.get("resolution_audit", []),
-                "history": [
-                    msg.to_dict()
-                    for msg in session.history
-                    if not (
-                        getattr(msg, "role", None) == "assistant"
-                        and _is_transient_ai_error_message(getattr(msg, "content", ""))
-                    )
-                ],
+                "history": monitor_history or _session_history_payload(),
                 "conflict_audit": session.identity_state.get("conflict_trace", {}),
                 "identity_inference_status": session.context_canvas.get("identity_inference_status") or {},
                 "crm_sync_status": "enabled" if identity_config.enable_crm_sync else "disabled",
@@ -1590,6 +1905,68 @@ async def wipe_memory(req: WipeRequest, request: Request):
     except Exception as e:
         logger.error(f"Selective wipe failed: {e}")
         return {"status": "error", "message": str(e)}
+
+
+@app.post("/maintenance/restore-demo-data")
+async def restore_demo_data(request: Request):
+    """Restore the bundled demo snapshot while the server is running."""
+    global runtime_restore_in_progress
+    if not _is_maintenance_authorized(request):
+        raise HTTPException(status_code=401, detail="Unauthorized maintenance request")
+
+    backup_zip = os.path.join(BASE_DIR, "backups", "demo_data.zip")
+    expanded_backup_dir = os.path.join(BASE_DIR, "backups", "demo_data")
+    temp_backup = None
+
+    if os.path.exists(backup_zip):
+        temp_backup = tempfile.TemporaryDirectory(prefix="ebbingflow_demo_restore_")
+        try:
+            _safe_extract_zip(backup_zip, temp_backup.name)
+            backup_dir = _find_demo_backup_dir(temp_backup.name)
+        except Exception as exc:
+            temp_backup.cleanup()
+            return {"status": "error", "message": f"invalid demo backup zip: {exc}"}
+    else:
+        backup_dir = expanded_backup_dir
+
+    missing = _missing_demo_backup_files(backup_dir)
+    if missing:
+        if temp_backup is not None:
+            temp_backup.cleanup()
+        return {
+            "status": "error",
+            "message": "demo backup is incomplete",
+            "missing": missing,
+        }
+
+    async with restore_demo_lock:
+        try:
+            runtime_restore_in_progress = True
+            await _close_active_websockets_for_restore()
+            await asyncio.sleep(0.25)
+            await _close_runtime_handles_for_restore()
+            _restore_demo_data_files(backup_dir)
+            node_count, rel_count = await _restore_neo4j_snapshot(backup_dir)
+            await _initialize_runtime_after_restore()
+            return {
+                "status": "success",
+                "message": "demo data restored",
+                "nodes": node_count,
+                "relationships": rel_count,
+                "history_messages": len(session.history) if session else 0,
+            }
+        except Exception as e:
+            logger.exception("[DemoRestore] Restore failed: %s", e)
+            try:
+                if session is None or global_db_driver is None or checkpoint_manager is None:
+                    await _initialize_runtime_after_restore()
+            except Exception as init_exc:
+                logger.exception("[DemoRestore] Runtime reinitialization failed: %s", init_exc)
+            return {"status": "error", "message": str(e)}
+        finally:
+            runtime_restore_in_progress = False
+            if temp_backup is not None:
+                temp_backup.cleanup()
 
 from fastapi import UploadFile, File, Form
 

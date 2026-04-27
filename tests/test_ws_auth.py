@@ -18,9 +18,10 @@ class _DummyWS:
 
 
 class _DummyRequest:
-    def __init__(self, headers=None, query_params=None):
+    def __init__(self, headers=None, query_params=None, client_host="127.0.0.1"):
         self.headers = headers or {}
         self.query_params = query_params or {}
+        self.client = type("Client", (), {"host": client_host})()
 
 
 @pytest.fixture
@@ -98,3 +99,13 @@ def test_maintenance_endpoint_rejects_unauthorized(_ws_auth_reset, monkeypatch):
     client = TestClient(server.app)
     response = client.post("/maintenance/wipe-memory", json={"items": ["cognitive"]})
     assert response.status_code == 401
+
+
+def test_maintenance_allows_loopback_when_auth_disabled_and_no_token(_ws_auth_reset):
+    req = _DummyRequest(client_host="127.0.0.1")
+    assert server._is_maintenance_authorized(req) is True
+
+
+def test_maintenance_rejects_remote_when_auth_disabled_and_no_token(_ws_auth_reset):
+    req = _DummyRequest(client_host="10.0.0.20")
+    assert server._is_maintenance_authorized(req) is False

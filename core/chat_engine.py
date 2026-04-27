@@ -2,7 +2,7 @@
 import asyncio
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import AsyncGenerator, Callable, Awaitable, Optional, Any
 
 from config import llm_config, memory_config, identity_config
@@ -76,7 +76,11 @@ DEFAULT_BASE_PROMPT = """你是一位拥有长期记忆、真正关心用户的 
 
 - 严禁将对方(主人)误称为你自己的名字(如 Andrew)。
 - 如果用户为你起了名字或确定了身份，你会永远记住并以此身份与他相处。
-- 你记得你们之间发生的一切，说话要拟人化，像朋友一样相处。"""
+- 严禁使用 Markdown 表格（Tables）。即使在记录资源或策略时，也必须使用自然段落进行叙述。
+- 严禁使用复杂的 Markdown 格式（如过多的加粗、斜体、列表），保持纯净的对话观感。
+- 严禁输出任何结构化的小标题（如“源起”、“核心记录”、“追溯标”、“我记得”等）。
+- 严禁分章节、分板块回复，所有分析必须融汇在自然对话中。
+- 你记得你们之间发生的一切，采用角色对话形式（Dialogue），像真人一样交谈对话，重点是回答必须简短，严禁超过 6 句话。"""
 
 class ChatEngine:
     """Chat engine v2."""
@@ -467,6 +471,7 @@ class ChatEngine:
         arg1: Any,
         arg2: Any,
         status_callback: Optional[Callable[..., Awaitable[None]]] = None,
+        simulated_at: Optional[str] = None,
     ) -> AsyncGenerator[str, None]:
         from core.monitoring import token_monitor
         token_monitor.reset_for_new_turn()
@@ -510,8 +515,10 @@ class ChatEngine:
         start_s1 = time.perf_counter()
         await _emit("01", "doing")
         session.clear_context_canvas()
-        session.add_user_message(user_input)
+        session.add_user_message(user_input, timestamp=simulated_at)
         session.context_canvas["latest_user_input"] = user_input
+        if simulated_at:
+            session.context_canvas["simulated_at"] = simulated_at
         session.context_canvas["inference_turn_count"] = int(session.context_canvas.get("inference_turn_count", 0)) + 1
         await self._apply_user_profile_rewrite(session, user_input)
         await self._apply_assistant_role_rewrite(session, user_input)
@@ -548,7 +555,7 @@ class ChatEngine:
         # --- 第三阶段: 认知组合与核心推理 (06-07) ---
         start_s3 = time.perf_counter()
         await _emit("06", "doing")
-        current_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        current_time_str = simulated_at or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         persona_prompt = self._build_persona_injection(session)
         assistant_persona_prompt = self._build_assistant_persona_injection(session)
         session.context_canvas["persona_prompt"] = persona_prompt
@@ -631,7 +638,13 @@ class ChatEngine:
         # --- 第四阶段: 记忆沉淀与上下文同步 (08-14) ---
         start_s4 = time.perf_counter()
         await _emit("08", "doing")
-        session.add_assistant_message(full_ai_response)
+        assistant_timestamp = None
+        if simulated_at:
+            try:
+                assistant_timestamp = (datetime.fromisoformat(simulated_at) + timedelta(seconds=45)).isoformat()
+            except ValueError:
+                assistant_timestamp = simulated_at
+        session.add_assistant_message(full_ai_response, timestamp=assistant_timestamp)
         
         await _emit("09", "doing") # 知识脱水
         await _emit("10", "doing") # 事实校验

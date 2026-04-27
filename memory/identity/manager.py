@@ -901,7 +901,7 @@ class PersonaManager:
                 )
             return rows
 
-        if self._is_short_term_behavior_category(obs.category) and obs.efstb_update:
+        if PersonaManager._is_short_term_behavior_category(obs.category) and obs.efstb_update:
             efstb = obs.efstb_update
             mappings = {
                 "efstb_urgency_level": efstb.urgency_level,

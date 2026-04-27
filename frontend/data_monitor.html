@@ -259,7 +259,7 @@
         <span class="version-tag">V1.0</span>
     </div>
     <div class="status-active" style="gap: 20px;">
-        <button id="infer-btn" onclick="triggerIdentityInference()" style="background: #000; color: #fff; border: 1px solid #000; padding: 4px 12px; font-family: 'Inter'; font-size: 0.75rem; font-weight: 900; cursor: pointer; border-radius: 2px; transition: 0.3s;">人格重判</button>
+        <button id="demo-import-btn" onclick="showDemoImportModal()" style="background: #000; color: #fff; border: 1px solid #000; padding: 4px 12px; font-family: 'Inter'; font-size: 0.75rem; font-weight: 900; cursor: pointer; border-radius: 2px; transition: 0.3s;">导入演示数据</button>
         <button id="kb-btn" onclick="showKBModal()" style="background: #333; color: #fff; border: 1px solid #333; padding: 4px 12px; font-family: 'Inter'; font-size: 0.75rem; font-weight: 900; cursor: pointer; border-radius: 2px; transition: 0.3s;">&#x77E5;&#x8BC6;&#x5E93;&#x7BA1;&#x7406; &#x1F4DA;</button>
         <button id="wipe-btn" onclick="showWipeModal()" style="background: #ff0000; color: #fff; border: none; padding: 4px 12px; font-family: 'Inter'; font-size: 0.75rem; font-weight: 900; cursor: pointer; border-radius: 2px; transition: 0.3s;">&#x8BB0;&#x5FC6;&#x6E05;&#x9664; &#x1F5D1;&#xFE0F;</button>
         <div style="display: flex; align-items: center; gap: 8px;">
@@ -283,6 +283,24 @@
         <div class="modal-footer">
             <button class="btn-action btn-cancel" onclick="hideWipeModal()">&#x6682;&#x4E0D;&#x6E05;&#x9664;</button>
             <button class="btn-action btn-confirm" onclick="executeWipe()">&#x6267;&#x884C;&#x6E05;&#x9664;</button>
+        </div>
+    </div>
+</div>
+
+<div class="modal-overlay" id="demo-import-modal">
+    <div class="modal-content">
+        <div class="modal-title">导入演示数据确认</div>
+        <p style="font-size: 0.85rem; margin-bottom: 20px; font-weight: 600;">这将用备份中的 demo 数据覆盖当前 AI 的对话历史、图谱记忆与本地索引。</p>
+
+        <div style="background: #f8f8f8; padding: 15px; border-left: 4px solid #ff0000; margin-bottom: 20px;">
+            <div style="font-weight: 800; font-size: 0.85rem;">演示数据覆盖 (Demo Memory Import)</div>
+            <div class="modal-desc" style="margin-top: 5px;">当前原数据记忆会被覆盖，恢复完成后审计页面会自动刷新。</div>
+            <div class="modal-desc" style="color: #666; font-style: italic;">请确认这是演示前需要导入的备份数据。</div>
+        </div>
+
+        <div class="modal-footer">
+            <button class="btn-action btn-cancel" onclick="hideDemoImportModal()">暂不导入</button>
+            <button class="btn-action btn-confirm" onclick="executeDemoImport()">确认导入</button>
         </div>
     </div>
 </div>
@@ -405,6 +423,26 @@
     let lastAssistantProfileState = null;
     let lastRagItems = [];
     let identityInferenceBusy = false;
+    let demoImportBusy = false;
+
+    function getMaintenanceToken() {
+        const params = new URLSearchParams(window.location.search);
+        const queryToken = (params.get('maintenance_token') || params.get('ws_token') || params.get('token') || '').trim();
+        if (queryToken) {
+            localStorage.setItem('maintenance_token', queryToken);
+            return queryToken;
+        }
+        return (localStorage.getItem('maintenance_token') || '').trim();
+    }
+
+    function maintenanceFetchOptions(options = {}) {
+        const headers = Object.assign({}, options.headers || {});
+        const token = getMaintenanceToken();
+        if (token) {
+            headers['x-maintenance-token'] = token;
+        }
+        return Object.assign({}, options, { headers });
+    }
 
     function isTransientAiErrorText(text) {
         const raw = String(text || '').trim();
@@ -935,7 +973,10 @@
                     .filter(m => !(m.role === 'assistant' && isTransientAiErrorText(m.content)))
                     .map(m => ({
                         role: m.role === 'assistant' ? 'AI' : 'USER',
-                        text: m.content
+                        text: m.content,
+                        msgId: m.msg_id || m.id || null,
+                        timestamp: m.timestamp || '',
+                        sessionId: m.session_id || ''
                     }));
                 renderHistory();
             }
@@ -950,6 +991,7 @@
             <div class="history-item">
                 <div class="history-role">${h.role === 'AI' ? (currentAsstName + '_SYSTEM') : 'USER_GOD_INPUT'}</div>
                 <div class="history-text">${h.text}</div>
+                <div style="font-size:0.52rem; color:#aaa; margin-top:6px;">${h.msgId ? `MSG:${h.msgId}` : 'MSG:N/A'}${h.timestamp ? ` | TIME:${h.timestamp}` : ''}${h.sessionId ? ` | SESSION:${h.sessionId}` : ''}</div>
             </div>
         `).join('');
     }
@@ -980,6 +1022,76 @@
         btn.innerText = "\u8BB0\u5FC6\u6E05\u9664 \uD83D\uDDD1\uFE0F";
         btn.disabled = false;
         btn.style.background = "#ff0000";
+    }
+
+    function showDemoImportModal() {
+        document.getElementById('demo-import-modal').style.display = 'flex';
+    }
+
+    function hideDemoImportModal() {
+        document.getElementById('demo-import-modal').style.display = 'none';
+        const btn = document.getElementById('demo-import-btn');
+        if (btn && !demoImportBusy) {
+            btn.innerText = "导入演示数据";
+            btn.disabled = false;
+            btn.style.opacity = "1";
+        }
+    }
+
+    function executeDemoImport() {
+        if (demoImportBusy) return;
+        demoImportBusy = true;
+
+        const btn = document.getElementById('demo-import-btn');
+        const overlay = document.getElementById('wait-overlay');
+        hideDemoImportModal();
+        if (btn) {
+            btn.disabled = true;
+            btn.innerText = "导入中...";
+            btn.style.opacity = "0.7";
+        }
+
+        document.querySelector('#wait-overlay .wait-text').innerText = 'IMPORTING_DEMO_MEMORY...';
+        document.querySelector('#wait-overlay div:last-child').innerText = '正在覆盖原数据记忆、恢复图谱与审计索引...';
+        overlay.style.display = 'flex';
+
+        fetch('/maintenance/restore-demo-data', maintenanceFetchOptions({ method: 'POST' }))
+        .then(async res => {
+            const data = await res.json().catch(() => ({}));
+            if (res.status === 401) {
+                const token = prompt("请输入维护令牌 (MAINTENANCE_TOKEN)");
+                if (token && token.trim()) {
+                    localStorage.setItem('maintenance_token', token.trim());
+                    return fetch('/maintenance/restore-demo-data', maintenanceFetchOptions({ method: 'POST' }))
+                        .then(r => r.json());
+                }
+            }
+            return data;
+        })
+        .then(data => {
+            if (data.status === 'success') {
+                window.location.replace('/monitor');
+                return;
+            }
+            alert("演示数据导入失败: " + (data.message || "unknown error"));
+            overlay.style.display = 'none';
+            demoImportBusy = false;
+            if (btn) {
+                btn.disabled = false;
+                btn.innerText = "导入演示数据";
+                btn.style.opacity = "1";
+            }
+        })
+        .catch(err => {
+            alert("请求错误: " + err);
+            overlay.style.display = 'none';
+            demoImportBusy = false;
+            if (btn) {
+                btn.disabled = false;
+                btn.innerText = "导入演示数据";
+                btn.style.opacity = "1";
+            }
+        });
     }
 
     async function triggerIdentityInference() {
@@ -1028,12 +1140,26 @@
             hideWipeModal();
             overlay.style.display = 'flex';
 
-            fetch('/maintenance/wipe-memory', {
+            fetch('/maintenance/wipe-memory', maintenanceFetchOptions({
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ items: items })
+            }))
+            .then(async res => {
+                const data = await res.json().catch(() => ({}));
+                if (res.status === 401) {
+                    const token = prompt("请输入维护令牌 (MAINTENANCE_TOKEN)");
+                    if (token && token.trim()) {
+                        localStorage.setItem('maintenance_token', token.trim());
+                        return fetch('/maintenance/wipe-memory', maintenanceFetchOptions({
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ items: items })
+                        })).then(r => r.json());
+                    }
+                }
+                return data;
             })
-            .then(res => res.json())
             .then(data => {
                 if (data.status === 'success') {
                     setTimeout(() => {

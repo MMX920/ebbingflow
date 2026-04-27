@@ -1,9 +1,8 @@
 <div align="center">
+
 <img src="./static/image/ebbingflow_logo.png" alt="EbbingFlow Logo" width="30%"/>
 
-# EbbingFlow
-
-**真正记得住你、认识你、随你成长的 AI 长效认知记忆引擎**
+# 真正记得住你、认识你、随你成长的 AI 长效认知记忆引擎
 
 *Long-term Cognitive Memory Engine for LLM Agents*
 
@@ -116,11 +115,26 @@ run.bat
 - Interaction Hub: http://localhost:8000
 - Data Monitor: http://localhost:8000/monitor
 
-**QQ Bot Example:**
+**QQ Bot Integration (Optional)**
 
-```powershell
-.\venv\Scripts\python.exe integrations\qq_bot.py
-```
+EbbingFlow supports interaction via QQ Bot, allowing for seamless long-term memory synchronization across devices:
+
+1. **Get Credentials**: Log in to the [QQ Open Platform](https://q.qq.com/qqbot/openclaw/), create a bot, and obtain your `AppID` and `AppSecret`.
+2. **Configure Environment**: Fill in the credentials in the corresponding fields of your `.env` file.
+3. **Launch**:
+   ```powershell
+   .\venv\Scripts\python.exe integrations\qq_bot.py
+   ```
+You can now chat with EbbingFlow directly in QQ.
+
+### 4. Experience with Demo Data (Optional)
+
+If you want to quickly preview the system's capabilities, you can import our pre-configured demo: **"Reborn as Zhuge Liang: Building an Empire with EbbingFlow"**.
+
+1. Start the server and access the **Data Monitor**: http://localhost:8000/monitor
+2. Click **Import Demo Data** in the top right corner.
+3. Confirm the warning, and the system will automatically restore the cognitive state including identity profiles and memory chains.
+4. **Note**: Currency conversions between ancient and modern units in this demo may be inconsistent. This is intended to demonstrate EbbingFlow's core advantage: maintaining traceability and robustness even when handling "dirty" or logically flawed input data.
 ---
 
 ## Online Demo
@@ -276,7 +290,7 @@ subject + object + predicate + action_type + context
 
 We are looking for strategic partners, research collaborators, and early adopters to jointly advance the long-term memory infrastructure.
 
-- WeChat: [update later]
+- WeChat: [aiassisbot]
 - Business Inquiries: [update later]
 
 ---

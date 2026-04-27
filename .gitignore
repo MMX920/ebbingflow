@@ -31,3 +31,6 @@ logs/
 # Local runtime data
 .data/
 tmp/
+
+# Keep the demo restore artifact as a single zip instead of the expanded backup tree
+backups/demo_data/

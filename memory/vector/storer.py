@@ -132,6 +132,7 @@ class VectorStorer:
         session_id: str,
         user_id: str = "default_user",
         role: str = "user",
+        timestamp: Optional[str] = None,
     ) -> None:
         if not content or not content.strip():
             return
@@ -169,7 +170,7 @@ class VectorStorer:
         token_monitor.record_embedding_usage(len(content))
 
         doc_id = str(uuid.uuid4())
-        timestamp = datetime.now().isoformat()
+        timestamp = timestamp or datetime.now().isoformat()
 
         self.chat_collection.add(
             documents=[content],

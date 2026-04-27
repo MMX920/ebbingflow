@@ -2,9 +2,7 @@
 
 <img src="./static/image/ebbingflow_logo.png" alt="EbbingFlow Logo" width="30%"/>
 
-# EbbingFlow
-
-**真正记得住你、认识你、随你成长的 AI 长效认知记忆引擎**
+# 真正记得住你、认识你、随你成长的 AI 长效认知记忆引擎
 
 *Long-term Cognitive Memory Engine for LLM Agents*
 
@@ -119,11 +117,27 @@ run.bat
 - Interaction Hub: http://localhost:8000
 - Data Monitor: http://localhost:8000/monitor
 
-**QQ Bot 示例：**
+**QQ 机器人集成示例 (可选)**
 
-```powershell
-.\venv\Scripts\python.exe integrations\qq_bot.py
-```
+EbbingFlow 支持通过 QQ 机器人进行跨平台交互，让你可以直接在移动端进行长效记忆沉淀：
+
+1. **获取凭据**：登录 [QQ 开放平台](https://q.qq.com/qqbot/openclaw/)，创建机器人并获取 `AppID` 与 `AppSecret`。
+2. **配置环境**：将获取的凭据填入 `.env` 文件中对应的配置项。
+3. **启动服务**：
+   ```powershell
+   .\venv\Scripts\python.exe integrations\qq_bot.py
+   ```
+现在，你就可以直接在 QQ 聊天框中与 EbbingFlow 交流互动。
+
+### 4. 导入演示数据 (可选)
+
+如果你希望快速预览系统的核心能力，可以导入我们预置的演示数据：**《重生成为诸葛亮，系统（Ebbingflow）助我成就霸业》**。
+
+1. 启动服务并进入 **数据审计页面 (Data Monitor)**：http://localhost:8000/monitor
+2. 点击右上角的 **导入演示数据**。
+3. 确认警告提示后，系统将自动恢复包含完整身份画像与证据链的认知记忆。
+4. **注意**：Demo 中古代与现代单位计算有误。这是为了展示 EbbingFlow 在面对“脏数据”输入时，依然能保证记忆可追溯、不崩盘的核心优势。
+
 ---
 
 ## 在线体验
@@ -280,7 +294,7 @@ subject + object + predicate + action_type + context
 
 我们正在寻找战略合作伙伴、研究协作者与早期使用者，共同推进长期记忆基础设施。
 
-- WeChat: [update later]
+- WeChat: [aiassisbot]
 - Business Inquiries: [update later]
 
 ---

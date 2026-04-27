@@ -816,12 +816,19 @@ class GraphWriterMiddleware(BaseMiddleware):
         last_user_msg_obj = user_messages[-1]
         last_user_msg_text = last_user_msg_obj.content
         source_msg_id = getattr(last_user_msg_obj, "msg_id", None)
+        source_timestamp = getattr(last_user_msg_obj, "timestamp", None)
         
         actor = getattr(session, "current_actor", None)
         try:
             valid_events, candidate_events, relations, observations, valid_envelopes = await self.extractor.extract_events_from_text(
                 last_user_msg_text, actor, source_msg_id=source_msg_id
             )
+            for event in valid_events:
+                if source_timestamp and not getattr(event, "event_time", None):
+                    ref = str(getattr(event, "timestamp_reference", "") or "").strip()
+                    if not ref or ref.upper() == "SNAPSHOT" or ref in {"今天", "今日"}:
+                        event.event_time = source_timestamp
+                        event.timestamp_reference = source_timestamp
             
             # --- [M1 Fix] Apply persona observations to PersonaManager ---
             if observations:

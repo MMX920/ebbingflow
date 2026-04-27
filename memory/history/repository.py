@@ -48,7 +48,8 @@ class ChromaHistoryRepository(ChatHistoryRepository):
                 content=content,
                 session_id=session_id,
                 user_id=user_id,
-                role=role
+                role=role,
+                timestamp=timestamp,
             )
         except Exception as e:
             logger.error(f"ChromaHistoryRepository Save Error: {e}")
@@ -77,7 +78,7 @@ class SqlHistoryRepository(ChatHistoryRepository):
         self.get_db = get_db
         self.sqlite_db_path = sqlite_config.db_path
 
-    def _append_turn_sqlite_sync(self, *, user_id: str, session_id: str, role: str, speaker: str, content: str, metadata: Optional[Dict] = None) -> int:
+    def _append_turn_sqlite_sync(self, *, user_id: str, session_id: str, role: str, speaker: str, content: str, timestamp: Optional[str] = None, metadata: Optional[Dict] = None) -> int:
         """
         在事件循环已运行的场景下，走 sqlite3 同步写入，避免 run_until_complete 嵌套报错。
         """
@@ -90,10 +91,17 @@ class SqlHistoryRepository(ChatHistoryRepository):
                 "INSERT OR IGNORE INTO ef_chat_sessions (session_id, user_id) VALUES (?, ?)",
                 (session_id, user_id),
             )
-            cur.execute(
-                "INSERT INTO ef_chat_messages (session_id, role, speaker, content, metadata) VALUES (?, ?, ?, ?, ?)",
-                (session_id, role, speaker, content, json.dumps(metadata) if metadata else None),
-            )
+            meta_json = json.dumps(metadata) if metadata else None
+            if timestamp:
+                cur.execute(
+                    "INSERT INTO ef_chat_messages (session_id, role, speaker, content, timestamp, metadata) VALUES (?, ?, ?, ?, ?, ?)",
+                    (session_id, role, speaker, content, timestamp, meta_json),
+                )
+            else:
+                cur.execute(
+                    "INSERT INTO ef_chat_messages (session_id, role, speaker, content, metadata) VALUES (?, ?, ?, ?, ?)",
+                    (session_id, role, speaker, content, meta_json),
+                )
             conn.commit()
             return int(cur.lastrowid)
         finally:
@@ -126,7 +134,7 @@ class SqlHistoryRepository(ChatHistoryRepository):
             # async 场景下无法 run_until_complete，优先用 sqlite 同步落盘
             if loop and loop.is_running():
                 return self._append_turn_sqlite_sync(
-                    user_id=user_id, session_id=session_id, role=role, speaker=speaker, content=content, metadata=metadata
+                    user_id=user_id, session_id=session_id, role=role, speaker=speaker, content=content, timestamp=timestamp, metadata=metadata
                 )
         except RuntimeError:
             pass
@@ -139,11 +147,11 @@ class SqlHistoryRepository(ChatHistoryRepository):
 
         return loop.run_until_complete(
             self.async_append_turn(
-                user_id=user_id, session_id=session_id, role=role, speaker=speaker, content=content, metadata=metadata
+                user_id=user_id, session_id=session_id, role=role, speaker=speaker, content=content, timestamp=timestamp, metadata=metadata
             )
         )
 
-    async def async_append_turn(self, *, user_id: str, session_id: str, role: str, speaker: str, content: str, metadata: Optional[Dict] = None) -> int:
+    async def async_append_turn(self, *, user_id: str, session_id: str, role: str, speaker: str, content: str, timestamp: Optional[str] = None, metadata: Optional[Dict] = None) -> int:
         await self._ensure_session(user_id, session_id)
         
         async with self.get_db() as conn:
@@ -152,18 +160,30 @@ class SqlHistoryRepository(ChatHistoryRepository):
             meta_json = json.dumps(metadata) if metadata else None
             
             if is_sqlite:
-                cursor = await conn.execute(
-                    "INSERT INTO ef_chat_messages (session_id, role, speaker, content, metadata) VALUES (?, ?, ?, ?, ?)",
-                    (session_id, role, speaker, content, meta_json)
-                )
+                if timestamp:
+                    cursor = await conn.execute(
+                        "INSERT INTO ef_chat_messages (session_id, role, speaker, content, timestamp, metadata) VALUES (?, ?, ?, ?, ?, ?)",
+                        (session_id, role, speaker, content, timestamp, meta_json)
+                    )
+                else:
+                    cursor = await conn.execute(
+                        "INSERT INTO ef_chat_messages (session_id, role, speaker, content, metadata) VALUES (?, ?, ?, ?, ?)",
+                        (session_id, role, speaker, content, meta_json)
+                    )
                 await conn.commit()
                 return cursor.lastrowid
             else:
                 # asyncpg 使用 $1, $2 占位符，且可以使用 RETURNING id
-                row = await conn.fetchrow(
-                    "INSERT INTO ef_chat_messages (session_id, role, speaker, content, metadata) VALUES ($1, $2, $3, $4, $5) RETURNING id",
-                    session_id, role, speaker, content, meta_json
-                )
+                if timestamp:
+                    row = await conn.fetchrow(
+                        "INSERT INTO ef_chat_messages (session_id, role, speaker, content, timestamp, metadata) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
+                        session_id, role, speaker, content, timestamp, meta_json
+                    )
+                else:
+                    row = await conn.fetchrow(
+                        "INSERT INTO ef_chat_messages (session_id, role, speaker, content, metadata) VALUES ($1, $2, $3, $4, $5) RETURNING id",
+                        session_id, role, speaker, content, meta_json
+                    )
                 return row['id']
 
     def get_recent(self, *, user_id: str, session_id: str, limit: int = 20) -> List[Dict]:
