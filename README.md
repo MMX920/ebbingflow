@@ -2,7 +2,7 @@
 
 <img src="./static/image/ebbingflow_logo.png" alt="EbbingFlow Logo" width="30%"/>
 
-# 真正记得住你、认识你、随你成长的 AI 长效认知记忆引擎
+**真正记得住你、认识你、随你成长的 AI 长效认知记忆引擎**
 
 *Long-term Cognitive Memory Engine for LLM Agents*
 
@@ -78,7 +78,7 @@ Edit the `.env` file and fill in the necessary API keys:
 # LLM API Configuration (Supports any OpenAI-compatible API)
 OPENAI_API_KEY=your_api_key
 OPENAI_BASE_URL=https://api.openai.com/v1
-OPENAI_MODEL=gpt-4o-mini
+OPENAI_MODEL=deepseek-v4-flash
 
 # Embedding Configuration (Local or OpenAI API)
 # Default [Option A: Local (SentenceTransformers)]

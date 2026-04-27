@@ -2,7 +2,7 @@
 
 <img src="./static/image/ebbingflow_logo.png" alt="EbbingFlow Logo" width="30%"/>
 
-# 真正记得住你、认识你、随你成长的 AI 长效认知记忆引擎
+**真正记得住你、认识你、随你成长的 AI 长效认知记忆引擎**
 
 *Long-term Cognitive Memory Engine for LLM Agents*
 
@@ -79,7 +79,7 @@ cp .env.example .env
 # LLM API配置（支持 OpenAI SDK 格式的任意 LLM API）
 OPENAI_API_KEY=your_api_key
 OPENAI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-OPENAI_MODEL=kimi-k2.5
+OPENAI_MODEL=deepseek-v4-flash
 
 # 嵌入模型配置（支持完全本地与 OpenAI SDK 格式 API）
 # 默认【方案 A：完全本地 (SentenceTransformers)】
