@@ -21,7 +21,7 @@
 
 ---
 
-## Project Overview
+## ⚡ Project Overview
 
 **EbbingFlow** is an AI assistant memory engine that integrates **Knowledge Graphs**, **Temporal Event Memory**, **Multi-Track Retrieval**, **Intelligent Reranking**, and the **Ebbinghaus Forgetting Curve**.
 
@@ -59,7 +59,14 @@ EbbingFlow supports identity anchoring, alias normalization, and profiling based
 
 ---
 
-## Quick Start
+## 🚀 Quick Start
+
+#### Prerequisites
+
+| Tool | Version Requirement | Description | Installation Check |
+|------|---------|------|---------|
+| **Python** | 3.10+ | Core backend runtime | `python --version` |
+| **Neo4j** | 4.4+ / 5.x | Graph DB support (Local or AuraDB Cloud) | Access `7474` or Cloud URI |
 
 ### 1. Environment Preparation
 ```powershell
@@ -137,19 +144,19 @@ If you want to quickly preview the system's capabilities, you can import our pre
 4. **Note**: Currency conversions between ancient and modern units in this demo may be inconsistent. This is intended to demonstrate EbbingFlow's core advantage: maintaining traceability and robustness even when handling "dirty" or logically flawed input data.
 ---
 
-## Online Demo
+## 🌐 Online Demo
 
 **Online Demo:** Coming soon... 
 
 ---
 
-## Video Demo
+## 🎬 Video Demo
 
 **Video Demo:** Coming soon... 
 
 ---
 
-## System Screenshots
+## 📸 System Screenshots
 
 <div align="center">
 <table>
@@ -162,7 +169,7 @@ If you want to quickly preview the system's capabilities, you can import our pre
 
 ---
 
-## Core Architecture
+## 🔄 Core Architecture
 
 ```text
 User Input
@@ -204,7 +211,7 @@ User Input
 
 ---
 
-## System Memory & Cognitive Panorama
+## 🧠 System Memory & Cognitive Panorama
 
 EbbingFlow is not a simple vector store, but a **hierarchical, auditable, and evolvable** cognitive engine.
 
@@ -268,7 +275,7 @@ subject + object + predicate + action_type + context
 
 ---
 
-## Roadmap
+## 🗺️ Roadmap
 
 - [x] **Identity Anchoring**: Supports multi-alias normalization and Dual-Layer Profile.
 - [x] **Unified Identity Engine**: Implements Big Five & EFSTB dual-axis personality reasoning.
@@ -286,7 +293,7 @@ subject + object + predicate + action_type + context
 - **Community Edition**: Core cognitive memory engine, suitable for individual developers and researchers.
 - **Enterprise/Pro Edition**: For enterprise scenarios requiring high availability, compliance, and precise memory management.
 
-## More Interaction
+## 📬 More Interaction
 
 We are looking for strategic partners, research collaborators, and early adopters to jointly advance the long-term memory infrastructure.
 
