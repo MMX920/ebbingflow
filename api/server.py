@@ -785,9 +785,9 @@ async def lifespan(app: FastAPI):
         if sql_pool:
             print(f"[SQL] PostgreSQL pool ready (tenant={postgres_config.tenant_id or 'not set'})")
         else:
-            print("[SQL] PostgreSQL configured but pool creation failed ??CRM queries disabled")
+            print("[SQL] PostgreSQL configured but pool creation failed; CRM queries disabled")
     else:
-        print("[SQL] PostgreSQL not fully configured ??CRM queries disabled (set POSTGRES_DSN or POSTGRES_PASSWORD)")
+        print("[SQL] PostgreSQL not fully configured; CRM queries disabled (set POSTGRES_DSN or POSTGRES_PASSWORD)")
 
     yield
     print("EbbingFlow Brain Shutting Down")
@@ -1385,10 +1385,10 @@ async def websocket_endpoint(websocket: WebSocket):
 
             state_text = (user_profile_struct.get("state") or "").strip()
             if (
-                ("??" in state_text or "??" in state_text)
+                any(marker in state_text for marker in ["\ufffd", "锟"])
                 and not any(
                     token in state_text
-                    for token in ["??", "??", "??", "??", "??", "Normal", "Active"]
+                    for token in ["Normal", "Active", "正常", "稳定", "活跃", "低落", "焦虑"]
                 )
             ):
                 user_profile_struct["state"] = ""
@@ -1628,11 +1628,11 @@ async def websocket_endpoint(websocket: WebSocket):
             session.context_canvas["vector_status"] = "active"
 
             # Auto mode: run personality re-inference every N conversation turns.
-            turn_count = int(session.context_canvas.get("inference_turn_count", 0) or 0) + 1
-            session.context_canvas["inference_turn_count"] = turn_count
+            turn_count = int(session.context_canvas.get("inference_turn_count", 0) or 0)
             if (turn_count % INFERENCE_AUTO_INTERVAL) == 0:
                 import time
                 infer_start = time.perf_counter()
+                await ws_status_callback("13", "doing", reason="auto_turn")
                 await ws_status_callback("14", "doing", reason="auto_turn")
                 auto_infer = await run_identity_reinference(
                     identity_config.user_id,
@@ -1643,20 +1643,32 @@ async def websocket_endpoint(websocket: WebSocket):
                 infer_status = str(auto_infer.get("status") or "").lower()
                 infer_reason = auto_infer.get("reason") or auto_infer.get("source") or ""
                 if infer_status in {"success", "no_change"}:
+                    await ws_status_callback("13", "done", time_ms=infer_ms, reason=infer_reason)
                     await ws_status_callback("14", "done", time_ms=infer_ms, reason=infer_reason)
                 elif infer_status == "skipped":
+                    await ws_status_callback("13", "skip", time_ms=infer_ms, reason=infer_reason or "skipped")
                     await ws_status_callback("14", "skip", time_ms=infer_ms, reason=infer_reason or "skipped")
                 else:
+                    await ws_status_callback("13", "error", time_ms=infer_ms, reason=infer_reason or infer_status or "infer_failed")
                     await ws_status_callback("14", "error", time_ms=infer_ms, reason=infer_reason or infer_status or "infer_failed")
             else:
+                rounds_left = INFERENCE_AUTO_INTERVAL - (turn_count % INFERENCE_AUTO_INTERVAL)
+                if rounds_left == INFERENCE_AUTO_INTERVAL:
+                    rounds_left = 0
                 auto_infer = {
                     "status": "skipped",
                     "reason": "interval_pending",
                     "source": "auto_turn",
                     "turn_count": turn_count,
                     "interval": INFERENCE_AUTO_INTERVAL,
-                    "rounds_left": INFERENCE_AUTO_INTERVAL - (turn_count % INFERENCE_AUTO_INTERVAL),
+                    "rounds_left": rounds_left,
                 }
+                await ws_status_callback(
+                    "13",
+                    "skip",
+                    time_ms=0,
+                    reason=f"interval_pending:{auto_infer['rounds_left']}",
+                )
                 await ws_status_callback(
                     "14",
                     "skip",
@@ -1667,7 +1679,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
             await asyncio.sleep(0.3)
             await sync_all()
-            print("??Monitor Audit Log: Graph synchronization flushed after conversation end.")
+            print("[Monitor Audit Log] Graph synchronization flushed after conversation end.")
 
     except WebSocketDisconnect:
         _drop_connection(websocket)

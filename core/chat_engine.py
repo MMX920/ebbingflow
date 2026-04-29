@@ -34,6 +34,9 @@ SYSTEM_PROMPT_TEMPLATE = """
 [PLAN 待办计划]
 {plan_memory}
 ---
+[NARRATIVE 叙事摘要 - 仅作脉络辅助]
+{narrative_memory}
+---
 
 [SYSTEM 系统认知区]
 你是 {assistant_name}。你曾用名：{assistant_aliases}。
@@ -57,9 +60,11 @@ SYSTEM_PROMPT_TEMPLATE = """
 4. 【画像优先级】：用户状态判断优先使用 v3 双层模型：`persona_injection`（EFSTB 快变量）+ `user_profile`（Big Five 慢变量）；具体偏好/目标以事实记忆为准。
 5. 【双画像执行】：回答前先校准“你是谁”（assistant_persona_injection），再根据用户画像（user_profile + persona_injection）调整语气、颗粒度与建议路径。
 6. 【记忆表达约束】：面向用户叙述记忆时，只能使用“我记得/我记忆中/我这边记录到”这类自然表达；禁止使用“图谱/数据库/向量召回/检索命中/节点/关系”等系统实现术语，除非用户明确要求技术审计细节。
+7. 【证据优先级】：[SQL_EVIDENCE] 与 [GRAPH_CORE] 是事实依据；[EPISODE]/[SAGA] 只是叙事摘要，不能覆盖原文证据。若摘要和证据冲突，必须以 SQL_EVIDENCE/GRAPH_CORE 为准。
 
 [CONTEXT 实时环境区]
 当前时间: {current_time}
+本轮检索倾向: {query_intent}
 """
 
 DEFAULT_BASE_PROMPT = """你是一位拥有长期记忆、真正关心用户的 AI {role_label}。
@@ -543,14 +548,20 @@ class ChatEngine:
         memories = await kb_engine.query(user_input_refined, user_id=session.user_id, session_id=session.session_id)
         dur_s2 = (time.perf_counter() - start_s2) * 1000
         session.context_canvas["rag_context_structured"] = [m.__dict__ if hasattr(m, "__dict__") else m for m in memories]
+        query_intent = str(kb_engine.last_latency.get("query_intent") or "semantic")
 
         await _emit("04", "done", time_ms=int(dur_s2))
         await _emit("05", "done", time_ms=int(dur_s2 * 0.8))
 
-        graph_mem = kb_engine.format_for_prompt([m for m in memories if m.source_type == "graph" or m.graph_validated])
-        vec_mem = kb_engine.format_for_prompt([m for m in memories if m.source_type == "vector" and not m.graph_validated])
-        struc_mem = kb_engine.format_for_prompt([m for m in memories if m.source_type in ["structured", "sql"]])
-        plan_mem = kb_engine.format_for_prompt([m for m in memories if m.source_type == "plan"])
+        prompt_memories = [m for m in memories if getattr(m, "in_prompt", False)]
+        graph_mem = kb_engine.format_for_prompt([
+            m for m in prompt_memories
+            if m.source_type == "graph" or (m.graph_validated and m.source_type not in {"episode", "saga"})
+        ])
+        vec_mem = kb_engine.format_for_prompt([m for m in prompt_memories if m.source_type == "vector" and not m.graph_validated])
+        struc_mem = kb_engine.format_for_prompt([m for m in prompt_memories if m.source_type in ["structured", "sql"]])
+        plan_mem = kb_engine.format_for_prompt([m for m in prompt_memories if m.source_type == "plan"])
+        narrative_mem = kb_engine.format_for_prompt([m for m in prompt_memories if m.source_type in {"episode", "saga"}])
 
         # --- 第三阶段: 认知组合与核心推理 (06-07) ---
         start_s3 = time.perf_counter()
@@ -603,7 +614,9 @@ class ChatEngine:
             vector_memory=vec_mem,
             structured_memory=struc_mem,
             plan_memory=plan_mem,
-            current_time=current_time_str
+            narrative_memory=narrative_mem,
+            current_time=current_time_str,
+            query_intent=query_intent
         )
         history_preview_lines = []
         for idx, d in enumerate(session.get_recent_history(), start=1):
@@ -636,7 +649,6 @@ class ChatEngine:
         await _emit("07", "done")
 
         # --- 第四阶段: 记忆沉淀与上下文同步 (08-14) ---
-        start_s4 = time.perf_counter()
         await _emit("08", "doing")
         assistant_timestamp = None
         if simulated_at:
@@ -651,44 +663,27 @@ class ChatEngine:
         await _emit("11", "doing") # 存储更新
         await _emit("12", "doing") # 上下文同步
         
-        await self.middleware_chain.execute_response_phase(full_ai_response, session)
+        completed_response_steps = set()
 
-        # Step 13/14: every 6 turns run settlement then persona re-inference.
-        turn_count = int(session.context_canvas.get("inference_turn_count", 0))
-        if turn_count > 0 and (turn_count % 6 == 0):
-            await _emit("13", "doing", detail="Settling personality evidence...")
-            await _emit("14", "doing", detail="Re-inferring personality state...")
-            manager = None
-            try:
-                manager = PersonaManager()
-                settlement = await manager.settle_personality_evidence(session.user_id, lookback_days=30)
-                session.context_canvas["personality_audit_summary"] = settlement
-                selected_refs = list(settlement.get("selected_refs") or [])
-                await manager.re_infer_identity(
-                    session.user_id,
-                    evidence_refs=selected_refs,
-                    audit_summary=settlement,
-                )
-                await _emit("13", "done")
-                await _emit("14", "done")
-            except Exception as e:
-                logger.warning("[Audit] Persona re-inference failed: %s", e)
-                await _emit("13", "skip")
-                await _emit("14", "skip")
-            finally:
-                if manager:
-                    await manager.close()
-        else:
-            await _emit("13", "skip")
-            await _emit("14", "skip")
+        async def _response_audit(step: str, status: str, **kwargs):
+            if step == "response_phase" and status == "error":
+                for pending_step in ("08", "09", "10", "11", "12"):
+                    if pending_step not in completed_response_steps:
+                        await _emit(pending_step, "error", time_ms=0, reason=kwargs.get("reason"))
+                        completed_response_steps.add(pending_step)
+                return
+            if status in {"done", "skip", "error"}:
+                completed_response_steps.add(step)
+            await _emit(step, status, **kwargs)
 
-
-        dur_s4 = (time.perf_counter() - start_s4) * 1000
-        await _emit("09", "done", time_ms=int(dur_s4 * 0.1))
-        await _emit("10", "done", time_ms=int(dur_s4 * 0.1))
-        await _emit("11", "done", time_ms=int(dur_s4 * 0.1))
-        await _emit("12", "done", time_ms=int(dur_s4 * 0.1))
-        await _emit("08", "done")
+        await self.middleware_chain.execute_response_phase(
+            full_ai_response,
+            session,
+            audit_callback=_response_audit,
+        )
+        for step in ("08", "09", "10", "11", "12"):
+            if step not in completed_response_steps:
+                await _emit(step, "done", time_ms=0)
 
         await kb_engine.close()
 

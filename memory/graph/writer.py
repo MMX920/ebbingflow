@@ -81,7 +81,7 @@ class AsyncGraphWriter:
         except Exception as exc:
             logging.getLogger(__name__).warning("[GraphWriter] EntityResolver disabled: %s", exc)
             self.resolver = None
-            
+
         try:
             from .relation_reasoner import RelationReasoner
             self.reasoner = RelationReasoner(driver=self._driver)
@@ -220,7 +220,7 @@ class AsyncGraphWriter:
 
     async def _record_evidence_link(self, event_uuid: str, message_id: int):
         """Record the evidence link from Neo4j event UUID to SQL message ID."""
-        if not message_id: 
+        if not message_id:
             logging.getLogger(__name__).warning(f"[EVIDENCE_TRACE] Missing message_id for event {event_uuid}, skipping link.")
             return
         from memory.sql.pool import get_db
@@ -273,16 +273,16 @@ class AsyncGraphWriter:
             return any(self._norm(alias) == probe for alias in aliases if alias)
 
         is_explicit_external_name = _matches_alias_pool(canonical_name, external_entity_names)
-        
+
         if self.resolver and os.getenv("ENABLE_ENTITY_RESOLUTION", "true").lower() == "true" and not is_explicit_external_name:
             res = self.resolver.resolve(canonical_name, owner_id, ctx)
-            
+
             if res.reason != "none" and session:
                 audit = session.context_canvas.get("resolution_audit", [])
                 audit_entry = {"name": canonical_name, "result": res.resolved_root_id, "reason": res.reason, "confidence": res.confidence}
                 if audit_entry not in audit:
                     audit.append(audit_entry)
-                    session.context_canvas["resolution_audit"] = audit[-20:] 
+                    session.context_canvas["resolution_audit"] = audit[-20:]
 
             resolved_id = self.resolver.filter_resolution(res, min_confidence=0.95)
             if not resolved_id and res.reason in {"canonical", "alias", "root_id"} and res.resolved_root_id in {identity_config.user_id, identity_config.assistant_id}:
@@ -307,7 +307,7 @@ class AsyncGraphWriter:
             or (not is_explicit_external_name and _matches_alias_pool(canonical_name, assistant_aliases))
         ):
             return {"entity_id": identity_config.assistant_id, "owner_id": owner_id}, asst_real or identity_config.default_asst_name
-        
+
         return {"name": canonical_name, "owner_id": owner_id}, canonical_name
 
     def _find_source_message_text(self, chat_session: ChatSession, source_msg_id: int) -> str:
@@ -382,23 +382,23 @@ class AsyncGraphWriter:
                 sub_can = self._canonicalize(event.subject)
                 obj_can = self._canonicalize(event.object)
                 if not sub_can: continue
-                
+
                 sub_match, sub_name = self._get_entity_params(sub_can, owner_id, current_names, session=chat_session)
                 sub_props = [f"{k}: ${k}" for k in sub_match.keys()]
                 cypher_sub = f"MERGE (s:Entity {{ {', '.join(sub_props)} }}) ON CREATE SET s.name = $sub_name WITH s "
-                
+
                 temporal_slot = self._infer_temporal_slot(event)
                 record_time = self._now_record_time()
                 sub_match_key = "entity_id" if "entity_id" in sub_match else "name"
                 sub_stable_id = sub_match.get("entity_id") or sub_match.get("name")
-                
+
                 val_str = event.predicate + (f" {event.object}" if event.object else "")
                 norm_val = self._normalize_value_for_slot(temporal_slot, val_str)
                 semantic_key = self._semantic_idempotency_key(sub_stable_id, temporal_slot, norm_val, owner_id)
 
                 cypher_body = f"""
                 MATCH (s:Entity) WHERE s.{{sub_match_key}} = ${{sub_match_key}} AND s.owner_id = $owner_id
-                
+
                 OPTIONAL MATCH (s)-[:ACTOR_IN]->(old:Event {{status: 'active', owner_id: $owner_id}})
                 WHERE (old.temporal_slot = $temporal_slot OR (old.temporal_slot IS NULL AND old.predicate = $predicate))
                   AND $temporal_slot IN ["name", "role", "state"]
@@ -406,15 +406,15 @@ class AsyncGraphWriter:
                 SET old.status = 'invalidated',
                     old.invalid_at = $record_time
                 WITH s, collect(old) as olds
-                
+
                 MERGE (existing:Event {{
                     semantic_key: $semantic_key,
                     owner_id: $owner_id
                 }})
-                ON CREATE SET 
+                ON CREATE SET
                     existing.uuid = $uuid,
-                    existing.subject = $sub_can, 
-                    existing.predicate = $predicate, 
+                    existing.subject = $sub_can,
+                    existing.predicate = $predicate,
                     existing.object = COALESCE($obj_can, ""),
                     existing.timestamp_reference = $timestamp,
                     existing.temporal_slot = $temporal_slot,
@@ -432,21 +432,21 @@ class AsyncGraphWriter:
                     existing.source_msg_id = $source_msg_id,
                     existing.record_time = $record_time,
                     existing.created_at = $record_time
-                ON MATCH SET 
+                ON MATCH SET
                     existing.mention_count = COALESCE(existing.mention_count, 0) + 1,
                     existing.updated_at = $record_time,
                     existing.record_time = $record_time,
                     existing.status = 'active',
                     existing.event_time = COALESCE(existing.event_time, $event_time),
                     existing.source_msg_id = COALESCE(existing.source_msg_id, $source_msg_id)
-                
+
                 MERGE (s)-[:ACTOR_IN]->(existing)
                 WITH existing, olds
                 UNWIND CASE WHEN size(olds) > 0 THEN olds ELSE [null] END AS inv_old
                 RETURN existing.uuid as final_id, existing.semantic_key as final_sk,
                        collect(DISTINCT CASE WHEN inv_old IS NOT NULL THEN inv_old.uuid ELSE null END) as inv_ids
                 """
-                
+
                 params = {
                     **sub_match,
                     "sub_name": sub_name, "sub_can": sub_can, "obj_can": obj_can,
@@ -459,15 +459,15 @@ class AsyncGraphWriter:
                     "record_time": record_time, "owner_id": owner_id,
                     "source_msg_id": getattr(event, "source_msg_id", None),
                 }
-                
+
                 res = await session.run(cypher_sub + cypher_body.replace("{sub_match_key}", sub_match_key), params)
                 data = await res.single()
                 if not data: continue
-                
+
                 final_id = data["final_id"]
                 final_sk = data["final_sk"]
                 inv_ids = data["inv_ids"]
-                
+
                 logging.getLogger(__name__).info(f"[EVIDENCE_TRACE] Created/Matched Event UUID: {final_id} for Msg ID: {getattr(event, 'source_msg_id', 'None')}")
                 await self._record_evidence_link(final_id, getattr(event, "source_msg_id", None))
 
@@ -487,7 +487,7 @@ class AsyncGraphWriter:
                         "source_msg_id": getattr(event, "source_msg_id", None),
                     },
                 )
-                
+
                 for iid in inv_ids:
                     if iid and iid != cdc_eid:
                         outbox.append_change(owner_id, "invalidate", "event", iid, {"slot": temporal_slot, "reason": "superseded"})
@@ -542,10 +542,10 @@ class AsyncGraphWriter:
                 from_can = self._canonicalize(rel.from_entity)
                 to_can = self._canonicalize(rel.to_entity)
                 if not from_can or not to_can: continue
-                
+
                 from_match, from_name = self._get_entity_params(from_can, owner_id, current_names, session=chat_session)
                 to_match, to_name = self._get_entity_params(to_can, owner_id, current_names, session=chat_session)
-                
+
                 high_risk_kws = ["SAME_AS", "WIFE", "HUSBAND", "SPOUSE", "LOVER", "PAY", "BANK", "FINANCE", "DOCTOR", "PATIENT", "DISEASE", "MEDICAL"]
                 rt_u = rel.relation_type.upper()
                 if any(k in rt_u for k in high_risk_kws) and not rt_u.startswith("POSSIBLY_") and not getattr(rel, "confirmed", False):
@@ -554,10 +554,10 @@ class AsyncGraphWriter:
 
                 temporal_slot = self._infer_rel_temporal_slot(rel.relation_type)
                 record_time = self._now_record_time()
-                
+
                 a_props = [f"{k}: $a_{k}" for k in from_match.keys()]
                 b_props = [f"{k}: $b_{k}" for k in to_match.keys()]
-                
+
                 cypher = f"MATCH (a:Entity {{ {', '.join(a_props)} }}), (b:Entity {{ {', '.join(b_props)} }}) "
                 if temporal_slot != "generic":
                     cypher += f"""
@@ -568,12 +568,12 @@ class AsyncGraphWriter:
                     """
                 else:
                     cypher += "WITH a, b, [] as inv_rels "
-                
+
                 cypher += """
                 MERGE (a)-[r:RELATION {type: $rel_type, owner_id: $owner_id, to_name: $to_name}]->(b)
-                SET r.status        = 'active', 
-                    r.temporal_slot = $temporal_slot, 
-                    r.valid_at      = $record_time, 
+                SET r.status        = 'active',
+                    r.temporal_slot = $temporal_slot,
+                    r.valid_at      = $record_time,
                     r.record_time   = $record_time,
                     r.from_id       = $from_id,
                     r.to_id         = $to_id,
@@ -583,7 +583,7 @@ class AsyncGraphWriter:
                     r.confidence     = $confidence
                 RETURN inv_rels
                 """
-                
+
                 fid = from_match.get('entity_id') or from_name
                 tid = to_match.get('entity_id') or to_name
                 params = {
@@ -597,7 +597,7 @@ class AsyncGraphWriter:
                 }
                 for k, v in from_match.items(): params[f"a_{k}"] = v
                 for k, v in to_match.items(): params[f"b_{k}"] = v
-                
+
                 res = await session.run(cypher, params)
                 data = await res.single()
                 inv_rels = data["inv_rels"] if data else []
@@ -605,7 +605,7 @@ class AsyncGraphWriter:
                     logging.getLogger(__name__).warning(
                         f"[EVIDENCE_TRACE] relation source_msg_id missing: {from_name} -[{rel.relation_type}]-> {to_name}"
                     )
-                
+
                 rel_id = f"{fid}|{rel.relation_type}|{tid}|{temporal_slot}"
                 outbox.append_change(
                     owner_id,
@@ -646,7 +646,7 @@ class AsyncGraphWriter:
                              "to_id": t_m.get("entity_id") or t_m.get("name"),
                              "source_msg_id": getattr(r, "source_msg_id", None),
                          })
-                    
+
                     inferred_data = await self.reasoner.reason(reason_input, owner_id)
                     if inferred_data:
                         inf_objects = []
@@ -796,7 +796,7 @@ class GraphWriterMiddleware(BaseMiddleware):
         except Exception as exc:
             logging.getLogger(__name__).warning("[GraphWriterMiddleware] SagaManager disabled: %s", exc)
             self.saga_manager = None
-            
+
         try:
             from memory.identity.evolution import IdentityEvolutionManager
             self.evolution_manager = IdentityEvolutionManager()
@@ -812,14 +812,34 @@ class GraphWriterMiddleware(BaseMiddleware):
     async def process_response(self, ai_output: str, session: ChatSession):
         user_messages = [m for m in session.history if m.role == "user"]
         if not user_messages: return ai_output
-        
+
         last_user_msg_obj = user_messages[-1]
         last_user_msg_text = last_user_msg_obj.content
         source_msg_id = getattr(last_user_msg_obj, "msg_id", None)
         source_timestamp = getattr(last_user_msg_obj, "timestamp", None)
-        
+
+        import time
+        audit_callback = getattr(session, "audit_callback", None)
+
+        async def finish_step(step: str, started_at: float):
+            if audit_callback:
+                await audit_callback(step, "done", time_ms=int((time.perf_counter() - started_at) * 1000))
+
+        async def fail_remaining_steps(start_step: str, reason: str):
+            if not audit_callback:
+                return
+            response_steps = ["08", "09", "10", "11", "12"]
+            try:
+                start_idx = response_steps.index(start_step)
+            except ValueError:
+                start_idx = 0
+            for step in response_steps[start_idx:]:
+                await audit_callback(step, "error", time_ms=0, reason=reason)
+
         actor = getattr(session, "current_actor", None)
+        current_step = "08"
         try:
+            step_started = time.perf_counter()
             valid_events, candidate_events, relations, observations, valid_envelopes = await self.extractor.extract_events_from_text(
                 last_user_msg_text, actor, source_msg_id=source_msg_id
             )
@@ -829,7 +849,10 @@ class GraphWriterMiddleware(BaseMiddleware):
                     if not ref or ref.upper() == "SNAPSHOT" or ref in {"今天", "今日"}:
                         event.event_time = source_timestamp
                         event.timestamp_reference = source_timestamp
-            
+            await finish_step("08", step_started)
+
+            current_step = "09"
+            step_started = time.perf_counter()
             # --- [M1 Fix] Apply persona observations to PersonaManager ---
             if observations:
                 from memory.identity.manager import PersonaManager
@@ -838,30 +861,38 @@ class GraphWriterMiddleware(BaseMiddleware):
                     await p_manager.apply_observations(session, observations)
                 finally:
                     await p_manager.close()
-            
+
             if not source_msg_id:
                 logging.getLogger(__name__).error(f"[EVIDENCE_TRACE] source_msg_id is MISSING for message: '{last_user_msg_text[:20]}...', evidence chain will be BROKEN.")
-            
-            if self.evolution_manager: 
+
+            if self.evolution_manager:
                 await self.evolution_manager.detect_and_evolve(valid_events, session, last_user_msg_text)
-            
+            await finish_step("09", step_started)
+
             current_names = {
-                "user": session.context_canvas.get("user_real_name"), 
+                "user": session.context_canvas.get("user_real_name"),
                 "assistant": session.context_canvas.get("assistant_real_name")
             }
-            
-            created_event_ids = []
-            if valid_events: 
-                created_event_ids = await self.writer.write_events(valid_events, candidate_events, session.session_id, session.user_id, current_names, chat_session=session)
-            
-            if relations: 
-                await self.writer.write_relations(relations, session.session_id, session.user_id, current_names, chat_session=session)
-            
-            # --- [Structured Memory Events] ---
+
+            current_step = "10"
+            step_started = time.perf_counter()
+            normalized_envelopes = []
             if valid_envelopes:
                 # 0. Normalization
                 normalized_envelopes = self.normalizer.normalize_envelopes(valid_envelopes)
-                
+            await finish_step("10", step_started)
+
+            current_step = "11"
+            step_started = time.perf_counter()
+            created_event_ids = []
+            if valid_events:
+                created_event_ids = await self.writer.write_events(valid_events, candidate_events, session.session_id, session.user_id, current_names, chat_session=session)
+
+            if relations:
+                await self.writer.write_relations(relations, session.session_id, session.user_id, current_names, chat_session=session)
+
+            # --- [Structured Memory Events] ---
+            if normalized_envelopes:
                 for env in normalized_envelopes:
                     try:
                         # 1. SQL Insert
@@ -871,16 +902,17 @@ class GraphWriterMiddleware(BaseMiddleware):
                             await self.event_repo.link_evidence(event_id, source_msg_id)
                     except Exception as env_err:
                         logging.getLogger(__name__).error(f"[EventSQL] Sync failed: {env_err}")
-                
+
+            episode = None
             # [M2.1] Episode generation and persistence
             un_episoded_turns = session.context_canvas.get("un_episoded_turns", 0) + 1
             session.context_canvas["un_episoded_turns"] = un_episoded_turns
-            
+
             ep_events_buffer = session.context_canvas.get("ep_events_buffer", [])
             if created_event_ids:
                 ep_events_buffer.extend(created_event_ids)
             session.context_canvas["ep_events_buffer"] = ep_events_buffer
-            
+
             # Use 5 turns as episode aggregation threshold
             if self.episode_manager and un_episoded_turns >= 5:
                 msgs_dicts = [m.to_dict() for m in session.history][-10:]
@@ -888,91 +920,96 @@ class GraphWriterMiddleware(BaseMiddleware):
                 episode = await self.episode_manager.extract_episode(msgs_dicts, ep_events_buffer)
                 if episode:
                     await self.writer.write_episode(episode, session.session_id, session.user_id)
+            await finish_step("11", step_started)
 
-                    # Keep latest short-term behavior tags in session context for persona injection.
-                    episode_efstb = getattr(episode, "efstb_tags", {}) or {}
-                    if episode_efstb:
-                        session.context_canvas["latest_efstb_tags"] = episode_efstb
-                    if getattr(episode, "mbti_hint", None):
-                        session.context_canvas["mbti_label"] = episode.mbti_hint
-                    if getattr(episode, "core_values_hint", None):
-                        current_values = list(session.context_canvas.get("user_core_values", []) or [])
-                        for value in episode.core_values_hint:
-                            if value not in current_values:
-                                current_values.append(value)
-                        session.context_canvas["user_core_values"] = current_values[:8]
-                    if getattr(episode, "big_five_observed", None):
-                        for key, value in (episode.big_five_observed or {}).items():
-                            try:
-                                session.context_canvas[f"big_five_{key}"] = max(0.0, min(1.0, float(value)))
-                            except (TypeError, ValueError):
-                                continue
-                    if (
-                        getattr(episode, "mbti_hint", None)
-                        or getattr(episode, "core_values_hint", None)
-                        or getattr(episode, "big_five_observed", None)
-                    ):
-                        from memory.identity.manager import PersonaManager
-                        p_manager = PersonaManager()
-                        try:
-                            await p_manager.apply_long_term_persona_hints(
-                                session.user_id,
-                                mbti_label=getattr(episode, "mbti_hint", None),
-                                big_five=getattr(episode, "big_five_observed", None),
-                                core_values=getattr(episode, "core_values_hint", None),
-                            )
-                        finally:
-                            await p_manager.close()
-                        try:
-                            from memory.identity.schema import (
-                                BigFiveVector,
-                                DualLayerProfile,
-                                LongTermPersona,
-                                EfstbBehavioralTags,
-                            )
+            current_step = "12"
+            step_started = time.perf_counter()
+            if episode:
+                if self.saga_manager:
+                    existing_sagas = await self.writer.get_active_sagas(session.user_id)
+                    target_saga = await self.saga_manager.cluster_episodes_into_saga(episode, existing_sagas)
+                    if target_saga:
+                        # Ensure the current episode is linked into saga
+                        if episode.episode_id not in target_saga.associated_episode_ids:
+                            target_saga.associated_episode_ids.append(episode.episode_id)
+                        await self.writer.write_saga(target_saga, session.user_id)
 
-                            short_term = EfstbBehavioralTags(
-                                urgency_level=float(episode_efstb.get("urgency_level", 0.5)),
-                                instruction_compliance=float(episode_efstb.get("instruction_compliance", 0.5)),
-                                granularity_preference=str(episode_efstb.get("granularity_preference", "medium")),
-                                logic_vs_emotion=float(episode_efstb.get("logic_vs_emotion", 0.5)),
-                            )
-                            long_term = LongTermPersona(
-                                mbti_label=session.context_canvas.get("mbti_label"),
-                                big_five=BigFiveVector(
-                                    openness=float(session.context_canvas.get("big_five_openness", 0.5)),
-                                    conscientiousness=float(session.context_canvas.get("big_five_conscientiousness", 0.5)),
-                                    extraversion=float(session.context_canvas.get("big_five_extraversion", 0.5)),
-                                    agreeableness=float(session.context_canvas.get("big_five_agreeableness", 0.5)),
-                                    neuroticism=float(session.context_canvas.get("big_five_neuroticism", 0.5)),
-                                ),
-                                core_values=session.context_canvas.get("user_core_values", []),
-                            )
-                            session.context_canvas["dual_layer_profile"] = DualLayerProfile(
-                                profile_id=session.user_id,
-                                long_term=long_term,
-                                short_term=short_term,
-                            )
-                        except Exception as e:
-                            logging.getLogger(__name__).warning(f"[PersonaInjection] Build profile failed: {e}")
-                    
-                    # [M2.2] 闂佽崵鍠愰悷杈╃不閹达絻浜?Saga 闂備浇澹堟ご鎼佹嚌妤ｅ啫绠?
-                    if self.saga_manager:
-                        existing_sagas = await self.writer.get_active_sagas(session.user_id)
-                        target_saga = await self.saga_manager.cluster_episodes_into_saga(episode, existing_sagas)
-                        if target_saga:
-                            # Ensure the current episode is linked into saga
-                            if episode.episode_id not in target_saga.associated_episode_ids:
-                                target_saga.associated_episode_ids.append(episode.episode_id)
-                            await self.writer.write_saga(target_saga, session.user_id)
+                # Keep latest short-term behavior tags in session context for persona injection.
+                episode_efstb = getattr(episode, "efstb_tags", {}) or {}
+                if episode_efstb:
+                    session.context_canvas["latest_efstb_tags"] = episode_efstb
+                if getattr(episode, "mbti_hint", None):
+                    session.context_canvas["mbti_label"] = episode.mbti_hint
+                if getattr(episode, "core_values_hint", None):
+                    current_values = list(session.context_canvas.get("user_core_values", []) or [])
+                    for value in episode.core_values_hint:
+                        if value not in current_values:
+                            current_values.append(value)
+                    session.context_canvas["user_core_values"] = current_values[:8]
+                if getattr(episode, "big_five_observed", None):
+                    for key, value in (episode.big_five_observed or {}).items():
+                        try:
+                            session.context_canvas[f"big_five_{key}"] = max(0.0, min(1.0, float(value)))
+                        except (TypeError, ValueError):
+                            continue
+                if (
+                    getattr(episode, "mbti_hint", None)
+                    or getattr(episode, "core_values_hint", None)
+                    or getattr(episode, "big_five_observed", None)
+                ):
+                    from memory.identity.manager import PersonaManager
+                    p_manager = PersonaManager()
+                    try:
+                        await p_manager.apply_long_term_persona_hints(
+                            session.user_id,
+                            mbti_label=getattr(episode, "mbti_hint", None),
+                            big_five=getattr(episode, "big_five_observed", None),
+                            core_values=getattr(episode, "core_values_hint", None),
+                        )
+                    finally:
+                        await p_manager.close()
+                    try:
+                        from memory.identity.schema import (
+                            BigFiveVector,
+                            DualLayerProfile,
+                            LongTermPersona,
+                            EfstbBehavioralTags,
+                        )
+
+                        short_term = EfstbBehavioralTags(
+                            urgency_level=float(episode_efstb.get("urgency_level", 0.5)),
+                            instruction_compliance=float(episode_efstb.get("instruction_compliance", 0.5)),
+                            granularity_preference=str(episode_efstb.get("granularity_preference", "medium")),
+                            logic_vs_emotion=float(episode_efstb.get("logic_vs_emotion", 0.5)),
+                        )
+                        long_term = LongTermPersona(
+                            mbti_label=session.context_canvas.get("mbti_label"),
+                            big_five=BigFiveVector(
+                                openness=float(session.context_canvas.get("big_five_openness", 0.5)),
+                                conscientiousness=float(session.context_canvas.get("big_five_conscientiousness", 0.5)),
+                                extraversion=float(session.context_canvas.get("big_five_extraversion", 0.5)),
+                                agreeableness=float(session.context_canvas.get("big_five_agreeableness", 0.5)),
+                                neuroticism=float(session.context_canvas.get("big_five_neuroticism", 0.5)),
+                            ),
+                            core_values=session.context_canvas.get("user_core_values", []),
+                        )
+                        session.context_canvas["dual_layer_profile"] = DualLayerProfile(
+                            profile_id=session.user_id,
+                            long_term=long_term,
+                            short_term=short_term,
+                        )
+                    except Exception as e:
+                        logging.getLogger(__name__).warning(f"[PersonaInjection] Build profile failed: {e}")
 
                 session.context_canvas["un_episoded_turns"] = 0
                 session.context_canvas["ep_events_buffer"] = []
-                
-        except Exception as e: 
+            await finish_step("12", step_started)
+
+        except Exception as e:
             import traceback
-            logging.getLogger(__name__).error(f"婵＄到閸?[MemoryGraph] Error: {e}\n{traceback.format_exc()}")
-            
+            logging.getLogger(__name__).error(f"[MemoryGraph] Error: {e}\n{traceback.format_exc()}")
+            await fail_remaining_steps(current_step, str(e))
+
         return ai_output
 
 

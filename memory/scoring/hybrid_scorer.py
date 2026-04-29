@@ -206,6 +206,39 @@ class HybridScorer:
             self.w_graph    = WEIGHT_GRAPH_HOP
             self.w_time     = WEIGHT_TIME_DECAY
             self.w_impact   = WEIGHT_IMPACT
+
+    @staticmethod
+    def _source_policy(query_intent: str) -> Dict[str, Dict]:
+        """Return source budgets and narrative multipliers for a query intent."""
+        base_budgets = {
+            "graph": getattr(_mem_cfg, "budget_graph", 3),
+            "structured": getattr(_mem_cfg, "budget_structured", 2),
+            "sql": getattr(_mem_cfg, "budget_sql", 2),
+            "plan": getattr(_mem_cfg, "budget_plan", 1),
+            "vector": getattr(_mem_cfg, "budget_vector", 3),
+            "bm25": getattr(_mem_cfg, "budget_bm25", 2),
+            "episode": getattr(_mem_cfg, "budget_episode", 1),
+            "saga": getattr(_mem_cfg, "budget_saga", 1),
+        }
+        policies = {
+            "fact": {
+                "budgets": {**base_budgets, "graph": 5, "structured": 3, "sql": 3, "episode": 0, "saga": 0},
+                "multipliers": {"episode": 0.45, "saga": 0.35},
+            },
+            "summary": {
+                "budgets": {**base_budgets, "graph": 2, "episode": 3, "saga": 1, "vector": 2},
+                "multipliers": {"episode": 1.15, "saga": 0.9},
+            },
+            "long_term": {
+                "budgets": {**base_budgets, "graph": 2, "episode": 2, "saga": 2, "vector": 1},
+                "multipliers": {"episode": 1.05, "saga": 1.25},
+            },
+            "semantic": {
+                "budgets": base_budgets,
+                "multipliers": {"episode": 0.85, "saga": 0.75},
+            },
+        }
+        return policies.get(query_intent, policies["semantic"])
     
     def _normalize_impact(self, impact_score: float) -> float:
         """将 impact_score (1~10) 归一化到 (0~1)"""
@@ -275,7 +308,7 @@ class HybridScorer:
                 selected.append(cand)
         return selected
     
-    def score(self, candidates: List[ScoredCandidate], top_k: int = 5) -> List[ScoredCandidate]:
+    def score(self, candidates: List[ScoredCandidate], top_k: int = 5, query_intent: str = "semantic") -> List[ScoredCandidate]:
         """
         主评分入口：对候选列表进行多维评分和 RRF 融合。
         
@@ -288,6 +321,10 @@ class HybridScorer:
         """
         if not candidates:
             return []
+
+        policy = self._source_policy(query_intent)
+        budgets = policy["budgets"]
+        multipliers = policy["multipliers"]
         
         # ── Step 1: 给每个候选计算时间衰减分 ──────────────────────
         for c in candidates:
@@ -302,7 +339,7 @@ class HybridScorer:
         
         # ── Step 2: 计算四维复合分 ─────────────────────────────────
         for c in candidates:
-            if c.source_type == "episode":
+            if c.source_type == "episode" and query_intent in {"summary", "long_term"}:
                 # Episode 默认具备更高的初始影响力 (Impact)
                 c.impact_score = max(c.impact_score, 7.5)
             c.final_score = self._compute_composite_score(c)
@@ -324,7 +361,11 @@ class HybridScorer:
         by_bm25 = sorted(candidates, key=lambda c: c.semantic_score if c.source_type == "bm25" else -1, reverse=True)
         
         # 轨道 F: 按 Episode 评分排序 (Episode Only) [M2.3]
-        by_episode = sorted(candidates, key=lambda c: c.final_score if c.source_type == "episode" else -1, reverse=True)
+        by_episode = sorted(
+            candidates,
+            key=lambda c: c.final_score if query_intent in {"summary", "long_term"} and c.source_type == "episode" else -1,
+            reverse=True,
+        )
 
         # ── Step 4: RRF 融合 ─────────────────────────────────────
         rrf_map = self._rrf_fusion([by_semantic, by_graph, by_time, by_impact, by_bm25, by_episode])
@@ -338,23 +379,14 @@ class HybridScorer:
             rrf_score_norm = rrf_map.get(content_key, 0.0) / max_rrf if max_rrf > 0 else 0.0
             
             # 最终分 = 70% 多维复合分 + 30% RRF 排名融合分
-            c.final_score = 0.70 * c.final_score + 0.30 * rrf_score_norm
+            c.final_score = (0.70 * c.final_score + 0.30 * rrf_score_norm) * multipliers.get(c.source_type, 1.0)
         
         # ── Step 6: 最终排序与配额动态过滤 (Budget Control) ──────
         candidates.sort(key=lambda c: c.final_score, reverse=True)
         
-        # 配额配置 (来自 config.py)
-        budgets = {
-            "graph": getattr(_mem_cfg, "budget_graph", 3),
-            "vector": getattr(_mem_cfg, "budget_vector", 2),
-            "episode": getattr(_mem_cfg, "budget_episode", 2), # 用户指定基线为 2
-            "saga": 1, 
-            "bm25": getattr(_mem_cfg, "budget_bm25", 1)
-        }
-        
         assigned = []
         rejected = []
-        counts = {"graph": 0, "vector": 0, "saga": 0, "episode": 0, "bm25": 0}
+        counts = {key: 0 for key in budgets}
         
         # ── 第一轮：严格按配额录用 (保证多样性) ───────────────────
         for c in candidates:
@@ -372,6 +404,8 @@ class HybridScorer:
         # 如果第一轮后没装满，从落选者中按分数高低补齐
         if len(assigned) < top_k and rejected:
             for r in rejected:
+                if budgets.get(r.source_type, 1) <= 0:
+                    continue
                 assigned.append(r)
                 if len(assigned) >= top_k:
                     break

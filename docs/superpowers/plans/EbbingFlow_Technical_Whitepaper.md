@@ -53,11 +53,14 @@ EbbingFlow 引入了专业的双时态逻辑：
 *   **快变量 (EFSTB Tags)**：捕捉实时的情绪、紧急程度和颗粒度偏好。
 *   **慢变量 (Big Five/MBTI)**：基于历史交互沉淀，动态调整长期的性格模型。
 
-### 3. MDRS 记忆综合评分算法
+### 3. 意图感知 MDRS / HybridScorer 记忆综合评分算法
 不再单纯依赖语义相似度（Cosine Similarity），而是引入了：
+*   **意图路由 (Intent Routing)**：将本轮问题归入 `fact`、`summary`、`long_term` 或 `semantic`，先决定检索源优先级。
 *   **语义相关度 (Relevancy)**
 *   **衰减因子 (Recency/Decay)**：模拟艾宾浩斯遗忘曲线。
 *   **信任评分 (Trust Score)**：基于证据链的强度决定记忆的牢固程度。
+*   **动态预算 (Dynamic Source Budget)**：事实型问题优先 SQL/Graph/Structured Evidence；Episode/Saga 只在摘要和长期叙事问题中提升权重。
+*   **Prompt 分区 (Evidence vs Narrative)**：事实证据进入 `[MEMORY]`，Episode/Saga 进入 `[NARRATIVE]`，叙事摘要不能覆盖原始证据。
 
 ---
 
@@ -77,4 +80,4 @@ AI 的未来不只是算力的堆砌，更是逻辑的艺术。EbbingFlow 证明
 > **EbbingFlow：让 AI 找回属于它的灵魂。**
 
 ---
-*Last Updated: 2026-04-10 (Post-Schema Unification Update)*
+*Last Updated: 2026-04-30 (Intent-aware Retrieval & SOP Audit Update)*

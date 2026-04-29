@@ -215,6 +215,33 @@ class VectorStorer:
         self.doc_collection.add(documents=chunks, ids=ids, metadatas=metadatas)
         return len(chunks)
 
+    def query(
+        self,
+        collection_name: str,
+        query_texts: List[str],
+        n_results: int = 5,
+        where: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """查询向量库并记录 Token 消耗"""
+        collections = {
+            "chat_memory": self.chat_collection,
+            "knowledge_base": self.doc_collection,
+        }
+        if collection_name not in collections:
+            raise ValueError(f"Unknown vector collection: {collection_name}")
+
+        result = collections[collection_name].query(
+            query_texts=query_texts,
+            n_results=n_results,
+            where=where
+        )
+        from core.monitoring import token_monitor
+
+        # Chroma embeds query_texts during a successful query; mirror that cost here.
+        total_len = sum(len(q or "") for q in query_texts)
+        token_monitor.record_embedding_usage(total_len)
+        return result
+
     def get_chat_count(self) -> int:
         return self.chat_collection.count()
 

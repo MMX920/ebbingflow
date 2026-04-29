@@ -50,9 +50,9 @@ Episode → 剧情片段：一段连续对话的上下文摘要
 Saga    → 长期主线：跨周、跨月的目标、关系和项目叙事
 ```
 
-### 3. 多轨检索融合
+### 3. 意图感知的多轨检索融合
 
-系统同时使用 Graph、Vector、SQL、BM25、Structured Events 和 Plan 检索，再通过 HybridScorer 进行时间衰减、RRF 融合和配额重排，避免单一来源淹没 Prompt。
+系统同时使用 Graph、Vector、SQL、BM25、Structured Events、Episode、Saga 和 Plan 检索。HybridScorer 会先判断本轮问题更偏向 `fact`、`summary`、`long_term` 还是 `semantic`，再动态调整各检索轨道的预算与权重：事实型问题优先 SQL/Graph/Structured Events，叙事型问题才提升 Episode/Saga。这样既能保留长期脉络，又避免摘要覆盖可回溯证据。
 
 ### 4. 身份与人格连续性
 
@@ -192,24 +192,27 @@ EbbingFlow 支持通过 QQ 机器人进行跨平台交互，让你可以直接�
    │
    ▼
 [智能重排 HybridScorer]
+   ├── 意图路由（fact / summary / long_term / semantic）
    ├── Ebbinghaus 时间衰减（含置信度护栏）
    ├── 多维打分（语义 / 图谱跳数 / 时间 / 影响力）
-   └── RRF 融合 + 配额控制
-       (Graph:3, Episode:2, Vector:3, Saga:1, BM25:2)
+   └── RRF 融合 + 意图感知配额控制
+       fact 优先 SQL/Graph/Structured，summary/long_term 才提升 Episode/Saga
    │
    ▼
 [LLM 生成 + 证据注入]
-   ├── Top-K 注入 Prompt
+   ├── 仅注入 HybridScorer 接纳的 in_prompt 候选
    ├── SQL Evidence Window 回溯注入
+   ├── [MEMORY] 事实区与 [NARRATIVE] 叙事区分离
    └── 流式输出（可追溯到 source_msg_id）
 
 ──────────────────────────────────────────────
 
 [写入沉淀链路（本轮结束后）]
-   ├── 事件抽取（Event / Relation / Observation / Structured Envelope）
-   ├── 写入图谱与 SQL（证据链绑定）
-   ├── Episode 聚合（约每 5 轮）
-   └── Saga 聚类归并（长期主线）
+   ├── 08 事件/事实抽取（Event / Relation / Observation / Structured Envelope）
+   ├── 09 人格观察与身份演化
+   ├── 10 结构化事件标准化/校验
+   ├── 11 写入图谱、SQL 与 Episode（证据链绑定）
+   └── 12 Saga 聚类归并与上下文同步（长期主线）
 ```
 
 ---
@@ -221,7 +224,9 @@ EbbingFlow 并非简单的向量存储，而是一套**具有层级感、可审�
 ### 核心亮点
 - **三层递进记忆**：构建 `Event (原子)` → `Episode (片段)` → `Saga (主线)` 的认知抽象，模拟人类自传体记忆。
 - **全链路证据闭环**：每一条认知判断均可通过 `source_msg_id` 100% 溯源至原始对话，杜绝“黑箱摘要”。
+- **意图感知检索优先级**：事实型问题强制优先 SQL/Graph/Structured Evidence；Episode/Saga 作为叙事脉络辅助，不覆盖原文证据。
 - **人格连续性**：集成 Big Five (慢变量) 与 EFSTB (快变量) 身份画像，让 AI 不只记住事实，更能在长期相处中“认识你”。
+- **SOP 成本审计**：Data Monitor 会按 08-12 子阶段拆分响应后处理的耗时与 token，用于定位事实提取、存储更新、Saga 聚类等真实成本。
 
 ---
 
@@ -235,7 +240,7 @@ EbbingFlow 并非简单的向量存储，而是一套**具有层级感、可审�
 | **4** | **Saga 主线层** | Neo4j | 跨月长期目标/项目叙事 | 长期稳定记忆与连续性 | 关联 Episode 回链 |
 | **5** | **Vector 语义轨** | ChromaDB | 对话/文档向量片段 | 模糊语义召回、语气唤醒 | 辅助索引 |
 | **6** | **Identity 层** | Neo4j + Session | Big Five / EFSTB 画像 | 身份一致性与策略个性化 | 观测记录可追踪 |
-| **7** | **HybridScorer** | 评分引擎 | 多轨候选集重排 | Ebbinghaus 衰减与配额控制 | 审计打分路径 |
+| **7** | **HybridScorer** | 评分引擎 | 多轨候选集重排 | 意图路由、Ebbinghaus 衰减、RRF 与动态配额控制 | 审计打分路径 |
 
 > [!TIP]
 > 每一个 `MemoryEvent` 都包含了 `impact_score`、`confidence` 以及 `source_msg_id`，确保了记忆的每一根神经末梢都能追溯到最初的感官输入。

@@ -58,6 +58,43 @@ class KnowledgeBaseEngine:
         from config import memory_config
         return bool(getattr(memory_config, "enable_bm25", True))
 
+    @staticmethod
+    def infer_query_intent(query: str) -> str:
+        """Classify retrieval intent so evidence and narrative memories do not compete blindly."""
+        import re
+
+        q = str(query or "").strip().lower()
+        if not q:
+            return "semantic"
+
+        long_term_markers = [
+            "长期", "主线", "整体", "全局", "一直", "以来", "长期目标", "长期关系",
+            "项目进展", "阶段", "脉络", "演变", "over time", "long-term", "roadmap",
+        ]
+        summary_markers = [
+            "最近", "这几轮", "这段时间", "总结", "概括", "回顾", "我们聊了什么",
+            "发生了什么", "进展如何", "summary", "recap", "what happened",
+        ]
+        fact_markers = [
+            "多少", "哪里", "什么时候", "哪天", "谁", "是什么", "有没有", "是否",
+            "上次说", "原文", "证据", "预算", "价格", "金额",
+            "电话", "地址", "日期", "时间", "关系", "名字", "生日", "how much",
+            "when", "where", "who", "what is", "evidence",
+        ]
+        numeric_fact_pattern = (
+            r"\d+\s*(元|块|万|亿|%|岁|年|月|日|号|点|分钟|小时|天|个)"
+            r"|\d+\s*(kg|g|cm|m|usd|rmb|cny|dollars?)\b"
+        )
+
+        has_fact_signal = bool(any(marker in q for marker in fact_markers) or re.search(numeric_fact_pattern, q))
+        if has_fact_signal:
+            return "fact"
+        if any(marker in q for marker in long_term_markers):
+            return "long_term"
+        if any(marker in q for marker in summary_markers):
+            return "summary"
+        return "semantic"
+
     async def fetch_identities(self, session):
         """Warm-up fetch for canonical user/assistant names from graph."""
         try:
@@ -83,6 +120,8 @@ class KnowledgeBaseEngine:
         """
         import time
         start_total = time.perf_counter()
+        query_intent = self.infer_query_intent(query)
+        self.last_latency["query_intent"] = query_intent
         
         # 1. 向量召回 (RAG)
         start_v = time.perf_counter()
@@ -159,7 +198,7 @@ class KnowledgeBaseEngine:
                 cand.graph_hop_score = await self._graph_hop_score(cand.speaker, query)
         
         # 应用混合评分排序 (获取全量加权结果)
-        scored_all = self.scorer.score(all_candidates, top_k=99)
+        scored_all = self.scorer.score(all_candidates, top_k=99, query_intent=query_intent)
 
         # Inject SQL evidence windows for prompt-adopted items only.
         top_prompt_candidates = [c for i, c in enumerate(scored_all) if i < self.top_k and c.source_msg_id]
@@ -485,14 +524,16 @@ class KnowledgeBaseEngine:
             candidates = []
             
             # 1. 检索对话记忆 (仅查找当前 user_id)
-            chat_results = self.chat_collection.query(
+            chat_results = self.v_storer.query(
+                collection_name="chat_memory",
                 query_texts=[query],
                 n_results=self.top_k,
                 where={"user_id": user_id} if user_id else None
             )
             
             # 2. 检索全量知识库
-            kb_results = self.knowledge_collection.query(
+            kb_results = self.v_storer.query(
+                collection_name="knowledge_base",
                 query_texts=[query],
                 n_results=self.top_k
             )

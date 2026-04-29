@@ -2,7 +2,7 @@
 中间件框架模块 (Middleware Framework)
 所有对输入输出的拦截、检索、身份识别、后台异步写入都在此处串联。
 """
-from typing import Any, List, Dict
+from typing import Any, Awaitable, Callable, List, Dict, Optional
 import logging
 
 from core.session import ChatSession
@@ -22,7 +22,11 @@ class BaseMiddleware:
         """
         return user_input
 
-    async def process_response(self, ai_output: str, session: ChatSession) -> str:
+    async def process_response(
+        self,
+        ai_output: str,
+        session: ChatSession,
+    ) -> str:
         """
         响应阶段：通常用于后台异步任务，如提取事件、异步写入图谱等。
         :param ai_output: AI 本轮返回的文本
@@ -51,14 +55,29 @@ class MiddlewareChain:
                 logger.error(f"Error in {mw.__class__.__name__}.process_request: {e}")
         return current_input
 
-    async def execute_response_phase(self, ai_output: str, session: ChatSession) -> str:
+    async def execute_response_phase(
+        self,
+        ai_output: str,
+        session: ChatSession,
+        audit_callback: Optional[Callable[..., Awaitable[None]]] = None,
+    ) -> str:
         """从后向前执行 Response 拦截 (类似洋葱模型)"""
         current_output = ai_output
-        for mw in reversed(self.middlewares):
-            try:
-                current_output = await mw.process_response(current_output, session)
-            except Exception as e:
-                logger.error(f"[中间件执行链异常] {mw.__class__.__name__}.process_response 崩溃: {e}")
+        previous_audit_callback = getattr(session, "audit_callback", None)
+        if audit_callback is not None:
+            session.audit_callback = audit_callback
+        active_audit_callback = getattr(session, "audit_callback", None)
+        try:
+            for mw in reversed(self.middlewares):
+                try:
+                    current_output = await mw.process_response(current_output, session)
+                except Exception as e:
+                    logger.error(f"[中间件执行链异常] {mw.__class__.__name__}.process_response 崩溃: {e}")
+                    if active_audit_callback:
+                        await active_audit_callback("response_phase", "error", reason=f"{mw.__class__.__name__}: {e}")
+        finally:
+            if audit_callback is not None:
+                session.audit_callback = previous_audit_callback
         return current_output
 
     async def close(self):

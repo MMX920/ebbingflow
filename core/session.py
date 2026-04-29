@@ -46,6 +46,7 @@ class ChatSession:
         self.session_id: str = session_id or str(uuid.uuid4())
         self.user_id: str = user_id
         self.history_repo = history_repo
+        self.audit_callback = None
         
         # 历史记录列表 (存放所有的短时记忆)
         self.history: List[ChatMessage] = []

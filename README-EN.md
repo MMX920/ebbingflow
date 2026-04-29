@@ -49,9 +49,9 @@ Episode → Plot Chunks: Contextual summaries of continuous dialogues.
 Saga    → Long-term Mainlines: Narrative of goals, relationships, and projects over weeks/months.
 ```
 
-### 3. Multi-Track Retrieval Fusion
+### 3. Intent-Aware Multi-Track Retrieval Fusion
 
-The system simultaneously uses Graph, Vector, SQL, BM25, Structured Events, and Plan retrieval, then applies time decay, RRF fusion, and quota reranking via **HybridScorer** to prevent a single source from overwhelming the prompt.
+The system simultaneously uses Graph, Vector, SQL, BM25, Structured Events, Episode, Saga, and Plan retrieval. **HybridScorer** first classifies the turn as `fact`, `summary`, `long_term`, or `semantic`, then dynamically adjusts source budgets and multipliers: factual questions prioritize SQL/Graph/Structured Events, while narrative questions can promote Episode/Saga. This keeps long-term continuity without letting summaries override traceable evidence.
 
 ### 4. Identity & Persona Continuity
 
@@ -189,24 +189,27 @@ User Input
    │
    ▼
 [Intelligent Reranking: HybridScorer]
+   ├── Intent Routing (fact / summary / long_term / semantic)
    ├── Ebbinghaus Time Decay (with Confidence Guard)
    ├── Multi-dimensional Scoring (Semantic / Graph Hops / Time / Impact)
-   └── RRF Fusion + Quota Control
-       (Graph:3, Episode:2, Vector:3, Saga:1, BM25:2)
+   └── RRF Fusion + Intent-aware Quota Control
+       fact prioritizes SQL/Graph/Structured; summary/long_term can promote Episode/Saga
    │
    ▼
 [LLM Generation + Evidence Injection]
-   ├── Top-K Injection into Prompt
+   ├── Inject only HybridScorer-accepted in_prompt candidates
    ├── SQL Evidence Window Back-injection
+   ├── Separate [MEMORY] factual evidence from [NARRATIVE] context
    └── Streaming Output (Traceable to source_msg_id)
 
 ──────────────────────────────────────────────
 
 [Ingestion Pipeline (Post-turn processing)]
-   ├── Event Extraction (Event / Relation / Observation / Structured Envelope)
-   ├── Write to Graph & SQL (Evidence Chain Binding)
-   ├── Episode Aggregation (~every 5 turns)
-   └── Saga Clustering & Merging (Long-term Mainlines)
+   ├── 08 Event / Fact Extraction (Event / Relation / Observation / Structured Envelope)
+   ├── 09 Persona Observation and Identity Evolution
+   ├── 10 Structured Event Normalization / Validation
+   ├── 11 Write Graph, SQL, and Episode records (Evidence Chain Binding)
+   └── 12 Saga Clustering and Context Synchronization (Long-term Mainlines)
 ```
 
 ---
@@ -218,7 +221,9 @@ EbbingFlow is not a simple vector store, but a **hierarchical, auditable, and ev
 ### Core Highlights
 - **Three-Layer Progressive Memory**: Builds a cognitive abstraction of `Event` → `Episode` → `Saga`, simulating human autobiographical memory.
 - **Full Evidence Loop**: Every cognitive judgment can be 100% traced back to the original dialogue via `source_msg_id`, eliminating "black-box summaries."
+- **Intent-Aware Retrieval Priority**: Factual questions strongly prefer SQL/Graph/Structured Evidence; Episode/Saga provide narrative context and do not override raw evidence.
 - **Persona Continuity**: Integrates Big Five (slow variables) and EFSTB (fast variables) identity profiling, allowing AI to truly "know you" over time.
+- **SOP Cost Audit**: Data Monitor splits post-response processing into 08-12 sub-stages so fact extraction, storage updates, and Saga clustering can be costed separately.
 
 ---
 
@@ -232,7 +237,7 @@ EbbingFlow is not a simple vector store, but a **hierarchical, auditable, and ev
 | **4** | **Saga Layer** | Neo4j | Long-term Goals/Mainlines | Factual Stability & Continuity | Linked to SQL |
 | **5** | **Vector Track** | ChromaDB | Dialogue/Doc Vector Chunks | Fuzzy Retrieval, Tone Awakening | Auxiliary Index |
 | **6** | **Identity Layer** | Neo4j + Session | Big Five / EFSTB Profiles | Consistency & Personalization | Traceable Observations |
-| **7** | **HybridScorer** | Scoring Engine | Multi-track Candidate Sets | Ebbinghaus Decay & RRF | Auditable Scoring Path |
+| **7** | **HybridScorer** | Scoring Engine | Multi-track Candidate Sets | Intent Routing, Ebbinghaus Decay, RRF & Dynamic Quotas | Auditable Scoring Path |
 
 > [!TIP]
 > Every `MemoryEvent` contains `impact_score`, `confidence`, and `source_msg_id`, ensuring that every "nerve ending" of the memory can be traced back to the original sensory input.
