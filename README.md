@@ -8,251 +8,255 @@
 
 > "Like Andrew Martin, our mission is to cross the boundary between code and soul through memory and evolution."
 >
-> —— *Inspired by Bicentennial Man*
+> 像安德鲁·马丁一样，我们的使命是通过记忆与演化，跨越代码与灵魂的边界。
+>
+> —— *电影《机器管家》*
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Status: v1.0 Stable](https://img.shields.io/badge/Status-v1.0_Stable-green.svg)]()
 [![Python: 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)]()
 [![Code Style: Black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
-[English](./README.md) | [中文文档](./README-ZH.md)
+[English](./README-EN.md) | [中文文档](./README.md)
 
 </div>
 
 ---
 
-## ⚡ Project Overview
+## ⚡ 项目概述
 
-**EbbingFlow** is an AI assistant memory engine that integrates **Knowledge Graphs**, **Temporal Event Memory**, **Multi-Track Retrieval**, **Intelligent Reranking**, and the **Ebbinghaus Forgetting Curve**.
+**EbbingFlow** 是一套融合 **知识图谱**、**时序事件记忆**、**多轨检索**、**智能重排** 与 **Ebbinghaus 遗忘曲线** 的 AI 助手记忆引擎。
 
-It is not just another chatbot, but an infrastructure layer that provides any LLM with **true long-term memory**: transforming conversations into traceable, auditable, and evolvable cognitive memories.
+它不是又一个聊天机器人，而是让任何 LLM 拥有**真正长期记忆**的基础设施层：把对话沉淀为可追溯、可审计、可演化的认知记忆。
 
 ---
 
-## What Problem Are We Solving?
+## 我们在解决什么问题
 
-Current AI memory often relies on simple vector retrieval, which is prone to issues like unverifiability, semantic drift, factual conflicts, and difficulties in long-term maintenance.
+当前 AI 记忆常依赖单一向量检索，容易出现不可验证、语义漂移、事实冲突和长期维护困难等问题。
 
-EbbingFlow achieves:
+EbbingFlow 做到的是：
 
-### 1. Evidence-Chain Memory
+### 1. 证据链记忆
 
-EbbingFlow doesn't just store "model-summarized facts"; it also preserves original chat messages and links **Event**, **Episode**, and **Saga** to the original SQL records via `source_msg_id`.
+EbbingFlow 不只保存“模型总结过的事实”，还会保留原始对话消息，并通过 `source_msg_id` 将 Event、Episode、Saga 与 SQL 原件关联起来。
+这意味着：记忆不是黑箱摘要，而是可以追溯到原文的认知索引。
 
-This means: memory is not a black-box summary, but a cognitive index that can be **100% traced back to the original text**.
-
-### 2. Three-Layer Long-Term Memory
+### 2. 三层长期记忆
 
 ```text
-Event   → Atomic Facts: Who did what at what time.
-Episode → Plot Chunks: Contextual summaries of continuous dialogues.
-Saga    → Long-term Mainlines: Narrative of goals, relationships, and projects over weeks/months.
+Event   → 原子事实：谁在什么时候做了什么
+Episode → 剧情片段：一段连续对话的上下文摘要
+Saga    → 长期主线：跨周、跨月的目标、关系和项目叙事
 ```
 
-### 3. Multi-Track Retrieval Fusion
+### 3. 多轨检索融合
 
-The system simultaneously uses Graph, Vector, SQL, BM25, Structured Events, and Plan retrieval, then applies time decay, RRF fusion, and quota reranking via **HybridScorer** to prevent a single source from overwhelming the prompt.
+系统同时使用 Graph、Vector、SQL、BM25、Structured Events 和 Plan 检索，再通过 HybridScorer 进行时间衰减、RRF 融合和配额重排，避免单一来源淹没 Prompt。
 
-### 4. Identity & Persona Continuity
+### 4. 身份与人格连续性
 
-EbbingFlow supports identity anchoring, alias normalization, and profiling based on **Big Five** (slow variables) and **EFSTB** (fast variables), allowing AI to not only remember facts but also maintain long-term consistency in interaction styles.
+EbbingFlow 支持用户与助手的身份锚定、别名归一、Big Five 慢变量与 EFSTB 快变量画像，让 AI 不只记住事实，也能维持长期一致的相处方式。
 
 ---
 
-## 🚀 Quick Start
+## 🚀 快速开始
 
-#### Prerequisites
+#### 前置要求
 
-| Tool | Version Requirement | Description | Installation Check |
+| 工具 | 版本要求 | 说明 | 安装检查 |
 |------|---------|------|---------|
-| **Python** | 3.10+ | Core backend runtime | `python --version` |
-| **Neo4j** | 4.4+ / 5.x | Graph DB support (Local or AuraDB Cloud) | Access `7474` or Cloud URI |
+| **Python** | 3.10+ | 核心后端运行环境 | `python --version` |
+| **Neo4j** | 4.4+ / 5.x | 图数据库支持（支持本地部署或 AuraDB 云端） | 访问 `7474` 或云端连接地址 |
 
-### 1. Environment Preparation
+### 1. 环境准备
 ```powershell
-# Create and install dependencies
+# 创建并安装依赖
 python -m venv venv
 .\venv\Scripts\python.exe -m pip install -r requirements.txt
 
-# Copy example config file
+# 复制示例配置文件
 cp .env.example .env
 ```
 
-### 2. Configuration
-Edit the `.env` file and fill in the necessary API keys:
+### 2. 参数配置
+编辑 `.env` 文件，填入必要的 API 密钥：
 
 ```ini
-# LLM API Configuration (Supports any OpenAI-compatible API)
+# LLM API配置（支持 OpenAI SDK 格式的任意 LLM API）
 OPENAI_API_KEY=your_api_key
-OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 OPENAI_MODEL=deepseek-v4-flash
 
-# Embedding Configuration (Local or OpenAI API)
-# Default [Option A: Local (SentenceTransformers)]
+# 嵌入模型配置（支持完全本地与 OpenAI SDK 格式 API）
+# 默认【方案 A：完全本地 (SentenceTransformers)】
 EMBED_TYPE=local
 EMBED_MODEL=paraphrase-multilingual-MiniLM-L12-v2
-# Recommended [Option C: OpenAI / DashScope Compatible]
+# 推荐【方案 C：OpenAI / 阿里百炼平台 兼容嵌入】
 EMBED_TYPE=openai
 EMBED_MODEL=text-embedding-3-small
-EMBED_BASE_URL=https://api.openai.com/v1
-EMBED_API_KEY=your_key_here
+EMBED_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+EMBED_API_KEY=sk-your-key-her
 
-# Neo4j Database Configuration
+# Neo4j 数据库配置
 NEO4J_URI=bolt://localhost:7687
 NEO4J_USERNAME=neo4j
 NEO4J_PASSWORD=your_password
+NEO4J_DATABASE=neo4j
 
-# NOTE: If POSTGRES_URL is not configured, the system will automatically fall back to local SQLite.
+# 提示：若不配置 POSTGRES_URL，系统将自动使用 SQLite 托底
 ```
 
-### 3. Startup
+### 3. 启动服务
 
-**Standard Startup:**
+**标准启动：**
 ```powershell
 .\venv\Scripts\python.exe api\server.py
 ```
 
-**Quick Start (Windows):**
+**快捷启动 (Windows)：**
 ```powershell
 run.bat
 ```
 
-**Access after startup:**
+**启动后访问：**
 
 - Interaction Hub: http://localhost:8000
 - Data Monitor: http://localhost:8000/monitor
 
-**QQ Bot Integration (Optional)**
+**QQ 机器人集成示例 (可选)**
 
-EbbingFlow supports interaction via QQ Bot, allowing for seamless long-term memory synchronization across devices:
+EbbingFlow 支持通过 QQ 机器人进行跨平台交互，让你可以直接在移动端进行长效记忆沉淀：
 
-1. **Get Credentials**: Log in to the [QQ Open Platform](https://q.qq.com/qqbot/openclaw/), create a bot, and obtain your `AppID` and `AppSecret`.
-2. **Configure Environment**: Fill in the credentials in the corresponding fields of your `.env` file.
-3. **Launch**:
+1. **获取凭据**：登录 [QQ 开放平台](https://q.qq.com/qqbot/openclaw/)，创建机器人并获取 `AppID` 与 `AppSecret`。
+2. **配置环境**：将获取的凭据填入 `.env` 文件中对应的配置项。
+3. **启动服务**：
    ```powershell
    .\venv\Scripts\python.exe integrations\qq_bot.py
    ```
-You can now chat with EbbingFlow directly in QQ.
+现在，你就可以直接在 QQ 聊天框中与 EbbingFlow 交流互动。
 
-### 4. Experience with Demo Data (Optional)
+### 4. 导入演示数据 (可选)
 
-If you want to quickly preview the system's capabilities, you can import our pre-configured demo: **"Reborn as Zhuge Liang: Building an Empire with EbbingFlow"**.
+如果你希望快速预览系统的核心能力，可以导入我们预置的演示数据：**《重生成为诸葛亮，系统（Ebbingflow）助我成就霸业》**。
 
-1. Start the server and access the **Data Monitor**: http://localhost:8000/monitor
-2. Click **Import Demo Data** in the top right corner.
-3. Confirm the warning, and the system will automatically restore the cognitive state including identity profiles and memory chains.
-4. **Note**: Currency conversions between ancient and modern units in this demo may be inconsistent. This is intended to demonstrate EbbingFlow's core advantage: maintaining traceability and robustness even when handling "dirty" or logically flawed input data.
----
-
-## 🌐 Online Demo
-
-**Online Demo:** Coming soon... 
+1. 启动服务并进入 **数据审计页面 (Data Monitor)**：http://localhost:8000/monitor
+2. 点击右上角的 **导入演示数据**。
+3. 确认警告提示后，系统将自动恢复包含完整身份画像与证据链的认知记忆。
+4. **注意**：Demo 中古代与现代单位计算有误。这是为了展示 EbbingFlow 在面对“脏数据”输入时，依然能保证记忆可追溯、不崩盘的核心优势。
 
 ---
 
-## 🎬 Video Demo
+## 🌐 在线体验
 
-**Video Demo:** Coming soon... 
+**在线体验：** Coming soon... 
 
 ---
 
-## 📸 System Screenshots
+## 🎬 视频演示
+
+**视频演示：** Coming soon... 
+
+---
+
+## 📸 系统截图
 
 <div align="center">
 <table>
 <tr>
-<td><img src="./static/image/screenshot_chat.png" alt="Interaction Hub" width="100%"/><br/><p align="center"><b>Interaction Hub</b> (Core Interaction)</p></td>
-<td><img src="./static/image/screenshot_monitor.png" alt="Data Monitor" width="100%"/><br/><p align="center"><b>Data Monitor</b> (Data Audit)</p></td>
+<td><img src="./static/image/screenshot_chat.png" alt="Interaction Hub" width="100%"/><br/><p align="center"><b>Interaction Hub</b>（核心交互）</p></td>
+<td><img src="./static/image/screenshot_monitor.png" alt="Data Monitor" width="100%"/><br/><p align="center"><b>Data Monitor</b>（数据审计）</p></td>
 </tr>
 </table>
 </div>
 
 ---
 
-## 🔄 Core Architecture
+## 🔄 核心架构
 
 ```text
-User Input
+用户输入
    │
    ▼
-[Identity Recognition / Alias Normalization]
-   └── Determine "Who am I / Who are you", resolve pronouns to absolute Actor IDs
+[身份识别 / 别名归一]
+   └── 确定“我是谁/你是谁”，解析代词到绝对实体 ID（Actor）
    │
    ▼
-[Memory Retrieval Engine]
-   ├── Graph Atomic Retrieval (Event via Neo4j)
-   ├── Graph Narrative Retrieval (Episode + Saga)
-   ├── Vector Retrieval (Chroma Vector)
-   ├── Keyword Retrieval (BM25)
-   ├── Structured Retrieval (SQL Structured Events / CRM)
-   └── Plan Retrieval (Plan / Task / Schedule)
+[记忆检索引擎]
+   ├── 图谱原子检索（Event via Neo4j）
+   ├── 图谱叙事检索（Episode + Saga）
+   ├── 向量检索（Chroma Vector）
+   ├── 关键词检索（BM25）
+   ├── 结构化检索（SQL Structured Events / CRM）
+   └── 计划检索（Plan / Task / Schedule）
    │
    ▼
-[Intelligent Reranking: HybridScorer]
-   ├── Ebbinghaus Time Decay (with Confidence Guard)
-   ├── Multi-dimensional Scoring (Semantic / Graph Hops / Time / Impact)
-   └── RRF Fusion + Quota Control
+[智能重排 HybridScorer]
+   ├── Ebbinghaus 时间衰减（含置信度护栏）
+   ├── 多维打分（语义 / 图谱跳数 / 时间 / 影响力）
+   └── RRF 融合 + 配额控制
        (Graph:3, Episode:2, Vector:3, Saga:1, BM25:2)
    │
    ▼
-[LLM Generation + Evidence Injection]
-   ├── Top-K Injection into Prompt
-   ├── SQL Evidence Window Back-injection
-   └── Streaming Output (Traceable to source_msg_id)
+[LLM 生成 + 证据注入]
+   ├── Top-K 注入 Prompt
+   ├── SQL Evidence Window 回溯注入
+   └── 流式输出（可追溯到 source_msg_id）
 
 ──────────────────────────────────────────────
 
-[Ingestion Pipeline (Post-turn processing)]
-   ├── Event Extraction (Event / Relation / Observation / Structured Envelope)
-   ├── Write to Graph & SQL (Evidence Chain Binding)
-   ├── Episode Aggregation (~every 5 turns)
-   └── Saga Clustering & Merging (Long-term Mainlines)
+[写入沉淀链路（本轮结束后）]
+   ├── 事件抽取（Event / Relation / Observation / Structured Envelope）
+   ├── 写入图谱与 SQL（证据链绑定）
+   ├── Episode 聚合（约每 5 轮）
+   └── Saga 聚类归并（长期主线）
 ```
 
 ---
 
-## 🧠 System Memory & Cognitive Panorama
+## 🧠 系统记忆与认知全景
 
-EbbingFlow is not a simple vector store, but a **hierarchical, auditable, and evolvable** cognitive engine.
+EbbingFlow 并非简单的向量存储，而是一套**具有层级感、可审计、可演化**的认知引擎。
 
-### Core Highlights
-- **Three-Layer Progressive Memory**: Builds a cognitive abstraction of `Event` → `Episode` → `Saga`, simulating human autobiographical memory.
-- **Full Evidence Loop**: Every cognitive judgment can be 100% traced back to the original dialogue via `source_msg_id`, eliminating "black-box summaries."
-- **Persona Continuity**: Integrates Big Five (slow variables) and EFSTB (fast variables) identity profiling, allowing AI to truly "know you" over time.
+### 核心亮点
+- **三层递进记忆**：构建 `Event (原子)` → `Episode (片段)` → `Saga (主线)` 的认知抽象，模拟人类自传体记忆。
+- **全链路证据闭环**：每一条认知判断均可通过 `source_msg_id` 100% 溯源至原始对话，杜绝“黑箱摘要”。
+- **人格连续性**：集成 Big Five (慢变量) 与 EFSTB (快变量) 身份画像，让 AI 不只记住事实，更能在长期相处中“认识你”。
 
 ---
 
-### Cognitive Tiering Table
+### 认知分层全景图
 
-| Layer | Module | Storage/Index | Data Content | Cognitive Role | Evidence Traceability |
+| 层级 | 模块 | 存储/索引 | 记录什么 | 认知作用 | 证据溯源 |
 |:---:|---|---|---|---|---|
-| **1** | **SQL Storage** | SQLite / PostgreSQL | 1:1 Raw Chat History | Authority, Audit Endpoint | **True Source** |
-| **2** | **Event Layer** | Neo4j | Atomic Facts (5W1H) | Detail Index, Entity Reasoning | Linked to SQL |
-| **3** | **Episode Layer** | Neo4j | Dialogue Plot Summaries | Mid-term Context Thread | Linked to SQL |
-| **4** | **Saga Layer** | Neo4j | Long-term Goals/Mainlines | Factual Stability & Continuity | Linked to SQL |
-| **5** | **Vector Track** | ChromaDB | Dialogue/Doc Vector Chunks | Fuzzy Retrieval, Tone Awakening | Auxiliary Index |
-| **6** | **Identity Layer** | Neo4j + Session | Big Five / EFSTB Profiles | Consistency & Personalization | Traceable Observations |
-| **7** | **HybridScorer** | Scoring Engine | Multi-track Candidate Sets | Ebbinghaus Decay & RRF | Auditable Scoring Path |
+| **1** | **SQL 主存** | SQLite / PostgreSQL | 1:1 原始对话全量 | 权威原件、审计终点 | **True Source** |
+| **2** | **Event 事件层** | Neo4j | 原子事实 (5W1H) | 细节索引、实体推理 | 回链 SQL |
+| **3** | **Episode 剧情层** | Neo4j | 连续对话片段摘要 | 中短期上下文脉络 | 关联事件回链 |
+| **4** | **Saga 主线层** | Neo4j | 跨月长期目标/项目叙事 | 长期稳定记忆与连续性 | 关联 Episode 回链 |
+| **5** | **Vector 语义轨** | ChromaDB | 对话/文档向量片段 | 模糊语义召回、语气唤醒 | 辅助索引 |
+| **6** | **Identity 层** | Neo4j + Session | Big Five / EFSTB 画像 | 身份一致性与策略个性化 | 观测记录可追踪 |
+| **7** | **HybridScorer** | 评分引擎 | 多轨候选集重排 | Ebbinghaus 衰减与配额控制 | 审计打分路径 |
 
 > [!TIP]
-> Every `MemoryEvent` contains `impact_score`, `confidence`, and `source_msg_id`, ensuring that every "nerve ending" of the memory can be traced back to the original sensory input.
+> 每一个 `MemoryEvent` 都包含了 `impact_score`、`confidence` 以及 `source_msg_id`，确保了记忆的每一根神经末梢都能追溯到最初的感官输入。
+
 
 ---
 
-## Generalized Event Slots
+## 泛化事件槽位
 
 ```text
-STATE_CHANGE  → Career changes, moving, name changes, status shifts
-INTERACTION   → Meetings, dinners, arguments, communication
-CONSUMPTION   → Shopping, movies, payments
-PLAN          → Resignation plans, travel plans, To-do arrangements
-OPINION       → Views on issues, expressions of attitude, judgments
-ACHIEVEMENT   → Promotions, project completion, goal attainment
-RELATIONSHIP  → Meeting new friends, marriage, relationship changes
-OTHER         → General events that do not fit the above categories
+STATE_CHANGE  → 换工作、搬家、改名、状态变化
+INTERACTION   → 开会、聚餐、争吵、沟通互动
+CONSUMPTION   → 购物、看电影、消费支付
+PLAN          → 计划辞职、打算旅行、待办安排
+OPINION       → 认为某事不对、观点表达、态度判断
+ACHIEVEMENT   → 升职、完成项目、达成目标
+RELATIONSHIP  → 认识新朋友、结婚、关系变化
+OTHER         → 无法归入以上类别的通用事件
 ```
 
-Core fields of each `MemoryEvent`:
+每条 `MemoryEvent` 的核心字段：
 
 ```text
 subject + object + predicate + action_type + context
@@ -262,55 +266,55 @@ subject + object + predicate + action_type + context
 
 ---
 
-## Tech Stack
+## 技术栈
 
-| Dimension | Technology Selection |
+| 维度 | 技术选型 |
 |---|---|
-| **Core Framework** | ![FastAPI](https://img.shields.io/badge/FastAPI-005571?style=flat&logo=fastapi) ![Python](https://img.shields.io/badge/Python-3776AB?style=flat&logo=python&logoColor=white) |
-| **Graph Storage** | ![Neo4j](https://img.shields.io/badge/Neo4j-008CC1?style=flat&logo=neo4j&logoColor=white) (Cognitive Topology) |
-| **Vector Search** | ![ChromaDB](https://img.shields.io/badge/ChromaDB-white?style=flat) (Fuzzy Semantic Matching) |
-| **Structured DB** | ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?style=flat&logo=postgresql&logoColor=white) / ![SQLite](https://img.shields.io/badge/SQLite-003B57?style=flat&logo=sqlite&logoColor=white) |
-| **Core Algorithms** | BM25 + RRF + **HybridScorer** (Ebbinghaus Decay) |
-| **LLM Interface** | OpenAI-compatible API (Kimi / GPT / Claude / DeepSeek) |
+| **核心框架** | ![FastAPI](https://img.shields.io/badge/FastAPI-005571?style=flat&logo=fastapi) ![Python](https://img.shields.io/badge/Python-3776AB?style=flat&logo=python&logoColor=white) |
+| **图谱存储** | ![Neo4j](https://img.shields.io/badge/Neo4j-008CC1?style=flat&logo=neo4j&logoColor=white) (核心认知拓扑) |
+| **向量检索** | ![ChromaDB](https://img.shields.io/badge/ChromaDB-white?style=flat) (语义模糊匹配) |
+| **结构化存储** | ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?style=flat&logo=postgresql&logoColor=white) / ![SQLite](https://img.shields.io/badge/SQLite-003B57?style=flat&logo=sqlite&logoColor=white) |
+| **核心算法** | BM25 + RRF + **HybridScorer** (Ebbinghaus 时间衰减) |
+| **LLM 接入** | OpenAI-compatible API (Kimi / GPT / Claude / DeepSeek) |
 
 ---
 
-## 🗺️ Roadmap
+## 🗺️ 路线图
 
-- [x] **Identity Anchoring**: Supports multi-alias normalization and Dual-Layer Profile.
-- [x] **Unified Identity Engine**: Implements Big Five & EFSTB dual-axis personality reasoning.
-- [x] **Four-Track Fusion**: RRF fusion of Vector + Graph + SQL + BM25.
-- [x] **Auditable Evidence**: Ensures all cognitive judgments are traceable back to raw messages.
-- [ ] **Multimodal Emotion**: Supports text, intonation, or wearable device emotional parsing.
-- [ ] **Proactive Care**: Active triggers based on long-term events and important dates.
-- [ ] **Dream Consolidation**: Simulates sleep-mode consolidation to compress and solidify memories.
-- [ ] **Intent-Driven OS**: Moving from "Dialogue" to auditable external action calls.
+- [x] 身份锚定系统：支持多别名归一化与 Dual-Layer Profile。
+- [x] 统一身份引擎：实现 Big Five 与 EFSTB 双轴人格推理。
+- [x] 四轨融合架构：Vector + Graph + SQL + BM25 的 RRF 融合。
+- [x] 可审计证据链：核心认知判断可回溯到原始消息。
+- [ ] 多模态情绪解析：支持文字、语调或穿戴设备指标。
+- [ ] 主动关怀与提醒：基于长期事件在重要时间点主动触发。
+- [ ] 离线记忆整合：模拟睡眠式 consolidation，压缩与固化长期记忆。
+- [ ] 意图驱动操作系统：从“对话”走向可审计的外部动作调用。
 
 ---
 
-## License & Support
+## 开源与商业支持
 
-- **Community Edition**: Core cognitive memory engine, suitable for individual developers and researchers.
-- **Enterprise/Pro Edition**: For enterprise scenarios requiring high availability, compliance, and precise memory management.
+- **开源社区版（Community）**：包含核心认知记忆引擎，适合个人开发者、研究者与 AI Agent 项目使用。
+- **商业授权版（Enterprise/Pro）**：面向需要高可用、强合规、身份迁移和记忆精确回撤能力的企业级场景。
 
-## 📬 More Interaction
+## 📬 更多交流
 
-We are looking for strategic partners, research collaborators, and early adopters to jointly advance the long-term memory infrastructure.
+我们正在寻找战略合作伙伴、研究协作者与早期使用者，共同推进长期记忆基础设施。
 
 - WeChat: [aiassisbot]
 - Business Inquiries: [update later]
 
 ---
 
-## License
+## 开源合规与协议
 
-This project is licensed under the **[Apache License 2.0](./LICENSE)**.
+本项目基于 **[Apache License 2.0](./LICENSE)** 协议开源。
 
-See **[THIRD_PARTY_LICENSES.md](./THIRD_PARTY_LICENSES.md)** for third-party dependency licenses.
+第三方依赖许可请参阅 **[THIRD_PARTY_LICENSES.md](./THIRD_PARTY_LICENSES.md)**。
 
 ---
 
-## Stats
+## 项目统计
 
 <div align="center">
 <img src="https://api.star-history.com/svg?repos=MMX920/ebbingflow&type=date" alt="Star History Chart" width="75%"/>
