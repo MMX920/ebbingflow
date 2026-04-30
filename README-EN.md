@@ -223,7 +223,6 @@ EbbingFlow is not a simple vector store, but a **hierarchical, auditable, and ev
 - **Full Evidence Loop**: Every cognitive judgment can be 100% traced back to the original dialogue via `source_msg_id`, eliminating "black-box summaries."
 - **Intent-Aware Retrieval Priority**: Factual questions strongly prefer SQL/Graph/Structured Evidence; Episode/Saga provide narrative context and do not override raw evidence.
 - **Persona Continuity**: Integrates Big Five (slow variables) and EFSTB (fast variables) identity profiling, allowing AI to truly "know you" over time.
-- **SOP Cost Audit**: Data Monitor splits post-response processing into 08-12 sub-stages so fact extraction, storage updates, and Saga clustering can be costed separately.
 
 ---
 
