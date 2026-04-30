@@ -124,8 +124,8 @@ class MemoryRetrieverMiddleware(BaseMiddleware):
 
             result = await session.run(
                 f"""
-                MATCH (sub:Entity)-[]->(evt:Event)
-                WHERE evt.owner_id = $uid AND evt.status = 'active' AND evt.invalid_at IS NULL
+                MATCH (sub:Entity {{owner_id: $uid}})-[]->(evt:Event {{owner_id: $uid}})
+                WHERE evt.status = 'active' AND evt.invalid_at IS NULL
                 {time_filter}
                 RETURN sub.name AS subject, evt.predicate AS predicate, evt.timestamp_reference AS time_ref
                 ORDER BY evt.record_time DESC, evt.created_at DESC
@@ -135,7 +135,7 @@ class MemoryRetrieverMiddleware(BaseMiddleware):
             )
             rows = await result.data()
             return [
-                self._fmt_event_line(r.get("subject"), r.get("predicate"), r.get("time_ref"), "时间未知")
+                self._fmt_event_line(r.get("subject"), r.get("predicate"), r.get("time_ref"), "unknown time")
                 for r in rows
             ]
 
@@ -165,8 +165,8 @@ class MemoryRetrieverMiddleware(BaseMiddleware):
 
             result = await session.run(
                 f"""
-                MATCH (sub:Entity)-[]-(evt:Event)
-                WHERE evt.owner_id = $uid AND evt.status = 'active' AND evt.invalid_at IS NULL
+                MATCH (sub:Entity {{owner_id: $uid}})-[]-(evt:Event {{owner_id: $uid}})
+                WHERE evt.status = 'active' AND evt.invalid_at IS NULL
                   AND (
                     ANY(kw IN $keywords WHERE coalesce(sub.name, '') CONTAINS kw) OR
                     ANY(kw IN $keywords WHERE coalesce(evt.predicate, '') CONTAINS kw) OR
@@ -181,7 +181,7 @@ class MemoryRetrieverMiddleware(BaseMiddleware):
             )
             rows = await result.data()
             return [
-                self._fmt_event_line(r.get("subject"), r.get("predicate"), r.get("time_ref"), "往期记录")
+                self._fmt_event_line(r.get("subject"), r.get("predicate"), r.get("time_ref"), "past record")
                 for r in rows
             ]
 
@@ -207,8 +207,8 @@ class MemoryRetrieverMiddleware(BaseMiddleware):
 
             result = await session.run(
                 f"""
-                MATCH (sub:Entity)-[:ACTOR_IN]->(evt:Event)
-                WHERE evt.owner_id = $uid AND evt.action_type = 'PLAN' AND evt.status = 'active' AND evt.invalid_at IS NULL
+                MATCH (sub:Entity {{owner_id: $uid}})-[:ACTOR_IN]->(evt:Event {{owner_id: $uid}})
+                WHERE evt.action_type = 'PLAN' AND evt.status = 'active' AND evt.invalid_at IS NULL
                 {time_filter}
                 RETURN sub.name AS subject, evt.predicate AS predicate, evt.timestamp_reference AS time_ref
                 ORDER BY evt.record_time DESC, evt.created_at DESC
@@ -218,7 +218,7 @@ class MemoryRetrieverMiddleware(BaseMiddleware):
             )
             rows = await result.data()
             return [
-                f"- {str(r.get('subject') or '未知主体').strip()} 曾计划：{str(r.get('predicate') or '').strip()}（预计：{str(r.get('time_ref') or '未知').strip()}）"
+                f"- {str(r.get('subject') or 'unknown subject').strip()} planned: {str(r.get('predicate') or '').strip()} (time: {str(r.get('time_ref') or 'unknown').strip()})"
                 for r in rows
             ]
 

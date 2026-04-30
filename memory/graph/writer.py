@@ -289,7 +289,9 @@ class AsyncGraphWriter:
                 resolved_id = res.resolved_root_id
             if resolved_id:
                 disp_name = res.resolved_name or canonical_name
-                if resolved_id == identity_config.user_id: disp_name = user_real or disp_name
+                if resolved_id == identity_config.user_id:
+                    resolved_id = owner_id
+                    disp_name = user_real or disp_name
                 if resolved_id == identity_config.assistant_id: disp_name = asst_real or disp_name
                 return {"entity_id": resolved_id, "owner_id": owner_id}, disp_name
 
@@ -300,7 +302,7 @@ class AsyncGraphWriter:
             or (user_norm and can_norm == user_norm)
             or (not is_explicit_external_name and _matches_alias_pool(canonical_name, user_aliases))
         ):
-            return {"entity_id": identity_config.user_id, "owner_id": owner_id}, user_real or identity_config.default_user_name
+            return {"entity_id": owner_id, "owner_id": owner_id}, user_real or identity_config.default_user_name
         if (
             can_norm in ["andrew", identity_config.assistant_id]
             or (asst_norm and can_norm == asst_norm)
@@ -364,10 +366,10 @@ class AsyncGraphWriter:
             return
         _set_clause = ", ".join([f"u.{k} = ${k}_repair" for k in repair])
         _params = {f"{k}_repair": v for k, v in repair.items()}
-        _params["uid"] = identity_config.user_id
+        _params["uid"] = getattr(chat_session, "user_id", None) or identity_config.user_id
         _params["now"] = record_time
         await session.run(
-            f"MATCH (u:Entity {{entity_id: $uid}}) SET {_set_clause}, u.persona_updated_at = $now",
+            f"MATCH (u:Entity {{entity_id: $uid, owner_id: $uid}}) SET {_set_clause}, u.persona_updated_at = $now",
             _params,
         )
 
@@ -496,7 +498,7 @@ class AsyncGraphWriter:
                 # --- [Demographic Auto Write-back] ---
                 # If the event subject is the user Entity and event_metadata contains
                 # demographic keys, normalize via field_contract and SET onto Entity node.
-                _is_user_subject = sub_match.get("entity_id") == identity_config.user_id
+                _is_user_subject = sub_match.get("entity_id") == owner_id
                 if _is_user_subject and event.event_metadata:
                     _source_text = self._find_source_message_text(chat_session, getattr(event, "source_msg_id", None))
                     _allow_user_demo_writeback = self._is_user_self_report_text(_source_text)
@@ -518,10 +520,10 @@ class AsyncGraphWriter:
                                 _demo_updates["primary_name"] = _demo_updates["name"]
                             _set_clause = ", ".join([f"u.{k} = ${k}_demo" for k in _demo_updates])
                             _demo_params = {f"{k}_demo": v for k, v in _demo_updates.items()}
-                            _demo_params["uid"] = identity_config.user_id
+                            _demo_params["uid"] = owner_id
                             _demo_params["now"] = record_time
                             await session.run(
-                                f"MATCH (u:Entity {{entity_id: $uid}}) SET {_set_clause}, u.persona_updated_at = $now",
+                                f"MATCH (u:Entity {{entity_id: $uid, owner_id: $uid}}) SET {_set_clause}, u.persona_updated_at = $now",
                                 _demo_params
                             )
                             logging.getLogger(__name__).info(
@@ -689,7 +691,7 @@ class AsyncGraphWriter:
                 ep.efstb_instruction_compliance = $efstb_instruction_compliance
             WITH ep
             UNWIND CASE WHEN size($associated_events) > 0 THEN $associated_events ELSE [null] END AS event_id
-            OPTIONAL MATCH (ev:Event {uuid: event_id})
+            OPTIONAL MATCH (ev:Event {uuid: event_id, owner_id: $owner_id})
             WITH ep, ev WHERE ev IS NOT NULL
             MERGE (ep)-[:CONTAINS_EVENT]->(ev)
             RETURN ep.episode_id
@@ -734,7 +736,7 @@ class AsyncGraphWriter:
                 sg.last_active = $last_active
             WITH sg
             UNWIND CASE WHEN size($episode_ids) > 0 THEN $episode_ids ELSE [null] END AS ep_id
-            OPTIONAL MATCH (ep:Episode {episode_id: ep_id})
+            OPTIONAL MATCH (ep:Episode {episode_id: ep_id, owner_id: $owner_id})
             WITH sg, ep WHERE ep IS NOT NULL
             MERGE (sg)-[:CONTAINS_EPISODE]->(ep)
             RETURN sg.saga_id

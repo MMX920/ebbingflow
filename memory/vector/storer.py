@@ -143,6 +143,7 @@ class VectorStorer:
                 where={
                     "$and": [
                         {"session_id": session_id},
+                        {"user_id": user_id},
                         {"role": role},
                         {"content_hash": content_hash},
                     ]
@@ -206,6 +207,7 @@ class VectorStorer:
         base_meta = {
             "source": source_name,
             "type": "document",
+            "user_id": (metadata_extra or {}).get("user_id", "default_user"),
             "timestamp": datetime.now().isoformat(),
         }
         if metadata_extra:

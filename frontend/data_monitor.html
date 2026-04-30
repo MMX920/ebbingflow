@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
@@ -416,7 +416,21 @@
 </div>
 
 <script>
-    const ws = new WebSocket("ws://localhost:8000/ws");
+    const pageParams = new URLSearchParams(window.location.search);
+    const userId = (pageParams.get('user_id') || pageParams.get('uid') || pageParams.get('owner_id') || pageParams.get('sandbox_id') || '').trim();
+    const userToken = (pageParams.get('user_token') || pageParams.get('access_token') || '').trim();
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsParams = new URLSearchParams();
+    if (userId) wsParams.set('user_id', userId);
+    if (userToken) wsParams.set('user_token', userToken);
+    const ws = new WebSocket(`${wsProtocol}//${window.location.host}/ws${wsParams.toString() ? `?${wsParams.toString()}` : ''}`);
+    function withUserParam(url) {
+        if (!userId) return url;
+        const separator = url.includes('?') ? '&' : '?';
+        const params = new URLSearchParams({ user_id: userId });
+        if (userToken) params.set('user_token', userToken);
+        return `${url}${separator}${params.toString()}`;
+    }
     let currentAsstName = 'Andrew';
     let fullHistory = [];
     let lastUserProfileState = null;
@@ -1105,7 +1119,7 @@
             btn.style.opacity = "0.7";
         }
         try {
-            const resp = await fetch('/identity/reinfer?force=true', { method: 'POST' });
+            const resp = await fetch(withUserParam('/identity/reinfer?force=true'), { method: 'POST' });
             const data = await resp.json();
             if (data.status === "error") {
                 alert("人格重判失败: " + (data.message || "unknown error"));
@@ -1143,7 +1157,7 @@
             fetch('/maintenance/wipe-memory', maintenanceFetchOptions({
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ items: items })
+                body: JSON.stringify({ items: items, user_id: userId || undefined, user_token: userToken || undefined })
             }))
             .then(async res => {
                 const data = await res.json().catch(() => ({}));
@@ -1154,7 +1168,7 @@
                         return fetch('/maintenance/wipe-memory', maintenanceFetchOptions({
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ items: items })
+                            body: JSON.stringify({ items: items, user_id: userId || undefined, user_token: userToken || undefined })
                         })).then(r => r.json());
                     }
                 }
@@ -1233,20 +1247,22 @@
         const formData = new FormData();
         formData.append('file', file);
         formData.append('chunk_size', chunkSize);
+        if (userId) formData.append('user_id', userId);
+        if (userToken) formData.append('user_token', userToken);
 
         const overlay = document.getElementById('wait-overlay');
         document.querySelector('#wait-overlay .wait-text').innerText = 'DEVOURING_DOCUMENT...';
         document.querySelector('#wait-overlay div:last-child').innerText = `正在以 ${chunkSize} 字符切片并注入知识库...`;
         overlay.style.display = 'flex';
 
-        fetch('/kb/upload', { method: 'POST', body: formData })
+        fetch(withUserParam('/kb/upload'), { method: 'POST', body: formData })
         .then(res => res.json())
         .then(data => {
             if (data.status !== 'success') { overlay.style.display = 'none'; alert(data.message); return; }
             let attempts = 0;
             function poll() {
                 attempts++;
-                fetch('/kb/list').then(r => r.json()).then(d => {
+                fetch(withUserParam('/kb/list')).then(r => r.json()).then(d => {
                     if ((d.files||[]).includes(file.name) || attempts >= 30) {
                         renderKBList(d.files||[]); overlay.style.display = 'none';
                     } else setTimeout(poll, 500);
@@ -1258,7 +1274,7 @@
     }
 
     function fetchKBList() {
-        fetch('/kb/list').then(r => r.json()).then(d => renderKBList(d.files||[]));
+        fetch(withUserParam('/kb/list')).then(r => r.json()).then(d => renderKBList(d.files||[]));
     }
 
     function renderKBList(files) {
@@ -1288,14 +1304,14 @@
     function deleteKBFile(filename, actionCell) {
         if (!confirm(`确定移除文件 [${filename}] 吗？\nAI 将失去相关知识。`)) return;
         actionCell.innerHTML = '<span style="display:inline-block;width:14px;height:14px;border:2px solid #ccc;border-top:2px solid #000;border-radius:50%;animation:spin 0.8s linear infinite;"></span>';
-        fetch('/kb/delete', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({filename}) })
+        fetch(withUserParam('/kb/delete'), { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({filename, user_id: userId || undefined, user_token: userToken || undefined}) })
         .then(r => r.json())
         .then(data => {
             if (data.status !== 'success') { alert('删除失败: ' + data.message); fetchKBList(); return; }
             let att = 0;
             function poll() {
                 att++;
-                fetch('/kb/list').then(r=>r.json()).then(d => {
+                fetch(withUserParam('/kb/list')).then(r=>r.json()).then(d => {
                     if (!(d.files||[]).includes(filename) || att>=20) renderKBList(d.files||[]);
                     else setTimeout(poll, 400);
                 }).catch(fetchKBList);
@@ -1313,7 +1329,7 @@
         document.querySelector('#wait-overlay .wait-text').innerText = 'PURGING_KNOWLEDGE_BASE...';
         document.querySelector('#wait-overlay div:last-child').innerText = '正在物理删除全部知识库向量索引...';
         overlay.style.display = 'flex';
-        fetch('/kb/clear', {method:'POST'})
+        fetch(withUserParam('/kb/clear'), {method:'POST'})
         .then(r => r.json())
         .then(data => {
             const reset = () => { btn.disabled=false; btn.textContent='清空全部资料'; overlay.style.display='none'; };
@@ -1321,7 +1337,7 @@
             let att = 0;
             function poll() {
                 att++;
-                fetch('/kb/list').then(r=>r.json()).then(d => {
+                fetch(withUserParam('/kb/list')).then(r=>r.json()).then(d => {
                     if (!(d.files||[]).length || att>=20) { renderKBList(d.files||[]); reset(); }
                     else setTimeout(poll, 400);
                 }).catch(reset);

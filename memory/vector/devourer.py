@@ -51,6 +51,7 @@ class DocumentDevourer:
         source_name: str,
         actor: Actor,
         session_id: str = "document_ingestion",
+        user_id: Optional[str] = None,
         extract_graph: bool = False
     ) -> dict:
         print(f"\n{C_CYAN}[DocumentDevourer] Starting ingestion for: {source_name} ({len(text)} chars){C_RESET}")
@@ -63,7 +64,7 @@ class DocumentDevourer:
         stored_count = self.storer.store_document_chunks(
             chunks=chunks,
             source_name=source_name,
-            metadata_extra={"session_id": session_id}
+            metadata_extra={"session_id": session_id, "user_id": user_id or actor.speaker_id}
         )
         print(f"{C_GREEN}[DocumentDevourer] [OK] {stored_count} chunks stored in vector memory.{C_RESET}")
         

@@ -91,7 +91,7 @@ class PersonaInferenceService:
             if refs:
                 result = await session.run(
                     """
-                    MATCH (e:Entity {entity_id: $uid})-[:HAS_FACT]->(f:PersonalityEvidence)
+                    MATCH (e:Entity {entity_id: $uid, owner_id: $uid})-[:HAS_FACT]->(f:PersonalityEvidence {owner_id: $uid})
                     WHERE elementId(f) IN $refs
                     RETURN
                         elementId(f) AS uuid,
@@ -113,7 +113,7 @@ class PersonaInferenceService:
 
             result = await session.run(
                 """
-                MATCH (e:Entity {entity_id: $uid})-[:HAS_FACT]->(f:PersonalityEvidence)
+                MATCH (e:Entity {entity_id: $uid, owner_id: $uid})-[:HAS_FACT]->(f:PersonalityEvidence {owner_id: $uid})
                 RETURN
                     elementId(f) AS uuid,
                     f.predicate AS predicate,

@@ -202,14 +202,25 @@ class SqlHistoryRepository(ChatHistoryRepository):
     async def async_get_recent(self, *, user_id: str, session_id: str, limit: int = 20) -> List[Dict]:
         async with self.get_db() as conn:
             is_sqlite = "sqlite" in str(type(conn)).lower()
-            sql = "SELECT id, role, speaker as name, content, timestamp FROM ef_chat_messages WHERE session_id = ? ORDER BY id DESC LIMIT ?" if is_sqlite else \
-                  "SELECT id, role, speaker as name, content, timestamp FROM ef_chat_messages WHERE session_id = $1 ORDER BY id DESC LIMIT $2"
+            sql = """
+                SELECT m.id, m.role, m.speaker as name, m.content, m.timestamp
+                FROM ef_chat_messages m
+                JOIN ef_chat_sessions s ON s.session_id = m.session_id
+                WHERE m.session_id = ? AND s.user_id = ?
+                ORDER BY m.id DESC LIMIT ?
+            """ if is_sqlite else """
+                SELECT m.id, m.role, m.speaker as name, m.content, m.timestamp
+                FROM ef_chat_messages m
+                JOIN ef_chat_sessions s ON s.session_id = m.session_id
+                WHERE m.session_id = $1 AND s.user_id = $2
+                ORDER BY m.id DESC LIMIT $3
+            """
 
             if is_sqlite:
-                cursor = await conn.execute(sql, (session_id, limit))
+                cursor = await conn.execute(sql, (session_id, user_id, limit))
                 rows = await cursor.fetchall()
             else:
-                rows = await conn.fetch(sql, session_id, limit)
+                rows = await conn.fetch(sql, session_id, user_id, limit)
             
             results = []
             for r in rows:
@@ -229,14 +240,25 @@ class SqlHistoryRepository(ChatHistoryRepository):
     async def async_history_window(self, *, user_id: str, session_id: str, offset: int = 0, limit: int = 50) -> List[Dict]:
         async with self.get_db() as conn:
             is_sqlite = "sqlite" in str(type(conn)).lower()
-            sql = "SELECT id, role, speaker as name, content, timestamp FROM ef_chat_messages WHERE session_id = ? ORDER BY id ASC LIMIT ? OFFSET ?" if is_sqlite else \
-                  "SELECT id, role, speaker as name, content, timestamp FROM ef_chat_messages WHERE session_id = $1 ORDER BY id ASC LIMIT $2 OFFSET $3"
+            sql = """
+                SELECT m.id, m.role, m.speaker as name, m.content, m.timestamp
+                FROM ef_chat_messages m
+                JOIN ef_chat_sessions s ON s.session_id = m.session_id
+                WHERE m.session_id = ? AND s.user_id = ?
+                ORDER BY m.id ASC LIMIT ? OFFSET ?
+            """ if is_sqlite else """
+                SELECT m.id, m.role, m.speaker as name, m.content, m.timestamp
+                FROM ef_chat_messages m
+                JOIN ef_chat_sessions s ON s.session_id = m.session_id
+                WHERE m.session_id = $1 AND s.user_id = $2
+                ORDER BY m.id ASC LIMIT $3 OFFSET $4
+            """
 
             if is_sqlite:
-                cursor = await conn.execute(sql, (session_id, limit, offset))
+                cursor = await conn.execute(sql, (session_id, user_id, limit, offset))
                 rows = await cursor.fetchall()
             else:
-                rows = await conn.fetch(sql, session_id, limit, offset)
+                rows = await conn.fetch(sql, session_id, user_id, limit, offset)
             return [dict(r) for r in rows]
 
     def get_message_by_id(self, msg_id: int) -> Optional[Dict]:

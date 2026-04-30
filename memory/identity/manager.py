@@ -1286,12 +1286,11 @@ class PersonaManager:
         async with self._driver.session(database=self.database) as session:
             await session.run(
                 """
-                MERGE (u:Entity {entity_id: $uid})
+                MERGE (u:Entity {entity_id: $uid, owner_id: $uid})
                 ON CREATE SET
                     u.primary_name = $uname,
                     u.name = $uname,
                     u.aliases = [$uname],
-                    u.owner_id = $uid,
                     u.role = 'user',
                     u.age = 'unknown',
                     u.gender = 'unknown',
@@ -1329,7 +1328,7 @@ class PersonaManager:
             )
             await session.run(
                 """
-                MATCH (u:Entity {entity_id: $uid}), (a:Entity {entity_id: $aid})
+                MATCH (u:Entity {entity_id: $uid, owner_id: $uid}), (a:Entity {entity_id: $aid, owner_id: $uid})
                 MERGE (a)-[r:RELATION {owner_id: $uid}]->(u)
                 ON CREATE SET r.type = 'loyal', r.created_at = $now
                 MERGE (u)-[r2:RELATION {owner_id: $uid}]->(a)
@@ -1344,7 +1343,7 @@ class PersonaManager:
         async with self._driver.session(database=self.database) as session:
             res = await session.run(
                 """
-                MATCH (u:Entity {entity_id: $uid})
+                MATCH (u:Entity {entity_id: $uid, owner_id: $uid})
                 RETURN u.big_five_openness AS o,
                        u.big_five_conscientiousness AS c,
                        u.big_five_extraversion AS e,
@@ -1377,7 +1376,7 @@ class PersonaManager:
             params = {k.replace("u.big_five_", ""): v for k, v in updates.items()}
             params["uid"] = uid
             params["now"] = datetime.now().isoformat()
-            await session.run(f"MATCH (u:Entity {{entity_id: $uid}}) SET {set_clauses}, u.persona_updated_at = $now", **params)
+            await session.run(f"MATCH (u:Entity {{entity_id: $uid, owner_id: $uid}}) SET {set_clauses}, u.persona_updated_at = $now", **params)
             logger.info("[PersonaManager] User %s BigFive Momentum Updated: %s", uid, params)
             return True
 
@@ -1407,7 +1406,7 @@ class PersonaManager:
                 mbti = str(mbti_label).strip().upper()
                 if 2 <= len(mbti) <= 6:
                     await session.run(
-                        "MATCH (u:Entity {entity_id: $uid}) SET u.mbti_label = $mbti, u.persona_updated_at = $now",
+                        "MATCH (u:Entity {entity_id: $uid, owner_id: $uid}) SET u.mbti_label = $mbti, u.persona_updated_at = $now",
                         uid=uid,
                         mbti=mbti,
                         now=now,
@@ -1420,7 +1419,7 @@ class PersonaManager:
                 if text and text not in clean_values:
                     clean_values.append(text)
             if clean_values:
-                res = await session.run("MATCH (u:Entity {entity_id: $uid}) RETURN u.core_values AS vals", uid=uid)
+                res = await session.run("MATCH (u:Entity {entity_id: $uid, owner_id: $uid}) RETURN u.core_values AS vals", uid=uid)
                 record = await res.single()
                 current = list(record["vals"] or []) if record else []
                 merged = current[:]
@@ -1429,7 +1428,7 @@ class PersonaManager:
                         merged.append(value)
                 if merged != current:
                     await session.run(
-                        "MATCH (u:Entity {entity_id: $uid}) SET u.core_values = $vals, u.persona_updated_at = $now",
+                        "MATCH (u:Entity {entity_id: $uid, owner_id: $uid}) SET u.core_values = $vals, u.persona_updated_at = $now",
                         uid=uid,
                         vals=merged[:8],
                         now=now,
@@ -1447,7 +1446,7 @@ class PersonaManager:
         async with self._driver.session(database=self.database) as session:
             result = await session.run(
                 """
-                MATCH (u:Entity {entity_id: $uid})-[:HAS_FACT]->(f:PersonalityEvidence)
+                MATCH (u:Entity {entity_id: $uid, owner_id: $uid})-[:HAS_FACT]->(f:PersonalityEvidence {owner_id: $uid})
                 RETURN
                     elementId(f) AS evidence_id,
                     f.predicate AS predicate,
@@ -1472,7 +1471,7 @@ class PersonaManager:
         async with self._driver.session(database=self.database) as session:
             await session.run(
                 """
-                MATCH (u:Entity {entity_id: $uid})
+                MATCH (u:Entity {entity_id: $uid, owner_id: $uid})
                 SET u.personality_audit_summary = $summary_json,
                     u.personality_audit_quality = $quality_index,
                     u.personality_audit_updated_at = $now
@@ -1512,7 +1511,7 @@ class PersonaManager:
                 # 2) Rebuild reference links to supporting facts.
                 await session.run(
                     """
-                    MATCH (u:Entity {entity_id: $uid})
+                    MATCH (u:Entity {entity_id: $uid, owner_id: $uid})
                     SET u.mbti_label = $mbti,
                         u.big_five_openness = $o,
                         u.big_five_conscientiousness = $c,
@@ -1523,12 +1522,12 @@ class PersonaManager:
                         u.persona_updated_at = $now
                     
                     WITH u
-                    OPTIONAL MATCH (u)-[r:BASED_ON {category: 'personality_inference'}]->(:Fact)
+                    OPTIONAL MATCH (u)-[r:BASED_ON {category: 'personality_inference'}]->(:Fact {owner_id: $uid})
                     DELETE r
                     
                     WITH u
                     UNWIND $refs AS ref_id
-                    MATCH (f:Fact) WHERE elementId(f) = ref_id
+                    MATCH (f:Fact {owner_id: $uid}) WHERE elementId(f) = ref_id
                     CREATE (u)-[:BASED_ON {category: 'personality_inference'}]->(f)
                     """,
                     uid=uid,

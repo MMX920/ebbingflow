@@ -7,6 +7,7 @@ All notable changes to the EbbingFlow project will be documented in this file st
 - **Intent-aware memory priority**: Retrieval now classifies each turn as `fact`, `summary`, `long_term`, or `semantic`, then applies source-specific budgets and multipliers in `HybridScorer`.
 - **Narrative prompt lane**: Episode/Saga candidates are injected into a separate `[NARRATIVE]` context area and only when accepted by the scorer.
 - **SOP response-phase audit tests**: Added regression coverage for response-phase audit errors and writer-internal failure handling.
+- **User data isolation**: Added per-user data isolation across chat history, vector memory, Neo4j graph data, and demo access tokens.
 
 ### Changed
 - **Evidence-first retrieval**: Fact-style questions now prioritize SQL/Graph/Structured Evidence and strictly exclude zero-budget narrative fallbacks.

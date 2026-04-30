@@ -8,6 +8,9 @@ import gc
 import shutil
 import tempfile
 import zipfile
+import re
+import hmac
+import hashlib
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException
 from fastapi.responses import FileResponse
 import uvicorn
@@ -39,10 +42,19 @@ from bridge.llm import LLMBridge
 # Global Instances
 engine = None
 session = None
+history_repo_global = None
+user_sessions = {}
 global_db_driver = None 
 checkpoint_manager = None
 crm_audit_cache = []
 crm_replay_stats = {"processed": 0, "skipped": 0, "failed": 0}
+USER_TOKEN_SECRET = (
+    os.getenv("USER_TOKEN_SECRET")
+    or server_config.ws_auth_token
+    or server_config.maintenance_token
+    or secrets.token_urlsafe(32)
+)
+ALLOW_DEFAULT_USER_WITHOUT_TOKEN = os.getenv("USER_TOKEN_ALLOW_DEFAULT_NO_TOKEN", "false").lower() == "true"
 restore_demo_lock = asyncio.Lock()
 runtime_restore_in_progress = False
 
@@ -336,6 +348,18 @@ def _is_ws_authorized(websocket: WebSocket) -> bool:
     return secrets.compare_digest(presented, expected)
 
 
+def _is_loopback_host(host: str) -> bool:
+    return str(host or "").strip().lower() in {"127.0.0.1", "::1", "localhost"}
+
+
+def _is_loopback_request(request: Request = None) -> bool:
+    return bool(request and _is_loopback_host(getattr(getattr(request, "client", None), "host", "")))
+
+
+def _is_loopback_ws(websocket: WebSocket = None) -> bool:
+    return bool(websocket and _is_loopback_host(getattr(getattr(websocket, "client", None), "host", "")))
+
+
 def _extract_http_token(request: Request) -> str:
     auth_header = str(request.headers.get("authorization") or "").strip()
     if auth_header.lower().startswith("bearer "):
@@ -383,7 +407,7 @@ async def run_identity_reinference(uid: str, force: bool = False, source: str = 
         async with manager._driver.session(database=manager.database) as neo_session:
             count_res = await neo_session.run(
                 """
-                MATCH (:Entity {entity_id:$uid})-[:HAS_FACT]->(f:PersonalityEvidence)
+                MATCH (:Entity {entity_id:$uid, owner_id:$uid})-[:HAS_FACT]->(f:PersonalityEvidence {owner_id:$uid})
                 RETURN count(f) AS pe
                 """,
                 uid=uid,
@@ -392,7 +416,7 @@ async def run_identity_reinference(uid: str, force: bool = False, source: str = 
             evidence_count = int((count_record or {}).get("pe", 0) or 0)
             fact_res = await neo_session.run(
                 """
-                MATCH (:Entity {entity_id:$uid})-[:HAS_FACT]->(f:Fact)
+                MATCH (:Entity {entity_id:$uid, owner_id:$uid})-[:HAS_FACT]->(f:Fact {owner_id:$uid})
                 RETURN count(f) AS fc
                 """,
                 uid=uid,
@@ -543,7 +567,7 @@ async def _fallback_infer_from_recent_dialogue(uid: str) -> dict:
                 async with manager._driver.session(database=manager.database) as neo_session:
                     await neo_session.run(
                         """
-                        MATCH (u:Entity {entity_id:$uid})
+                        MATCH (u:Entity {entity_id:$uid, owner_id:$uid})
                         SET u.big_five_openness = $o,
                             u.big_five_conscientiousness = $c,
                             u.big_five_extraversion = $e,
@@ -565,7 +589,7 @@ async def _fallback_infer_from_recent_dialogue(uid: str) -> dict:
                 async with manager._driver.session(database=manager.database) as neo_session:
                     await neo_session.run(
                         """
-                        MATCH (u:Entity {entity_id:$uid})
+                        MATCH (u:Entity {entity_id:$uid, owner_id:$uid})
                         SET u.personality_inference_reasoning = $reasoning,
                             u.persona_updated_at = $now
                         """,
@@ -685,7 +709,7 @@ def _session_history_payload() -> list[dict]:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global engine, session, global_db_driver
+    global engine, session, global_db_driver, history_repo_global
     engine = get_standard_engine()
     backend = identity_config.chat_history_backend
     if backend == "sql":
@@ -706,6 +730,8 @@ async def lifespan(app: FastAPI):
         print(f"[Bootstrap] Using Chroma History Backend (Legacy/RAG Only)")
 
     session = ChatSession(session_id="master_session", user_id=identity_config.user_id, history_repo=history_repo)
+    history_repo_global = history_repo
+    user_sessions[session.user_id] = session
     await session.restore_from_repo()
     
     global_db_driver = AsyncGraphDatabase.driver(
@@ -854,6 +880,59 @@ async def broadcast(message: dict):
     for connection in disconnected:
         _drop_connection(connection)
 
+def _sanitize_user_id(user_id: str = None) -> str:
+    raw = str(user_id or identity_config.user_id or "").strip()
+    return re.sub(r"[^A-Za-z0-9_.:-]", "", raw) or identity_config.user_id
+
+def _sign_user_id(user_id: str) -> str:
+    uid = _sanitize_user_id(user_id)
+    return hmac.new(
+        USER_TOKEN_SECRET.encode("utf-8"),
+        uid.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+def _is_valid_user_token(
+    user_id: str,
+    token: str = None,
+    request: Request = None,
+    websocket: WebSocket = None,
+) -> bool:
+    uid = _sanitize_user_id(user_id)
+    supplied = str(token or "").strip()
+    if (
+        uid == identity_config.user_id
+        and not supplied
+        and (ALLOW_DEFAULT_USER_WITHOUT_TOKEN or _is_loopback_request(request) or _is_loopback_ws(websocket))
+    ):
+        return True
+    return bool(supplied) and hmac.compare_digest(supplied, _sign_user_id(uid))
+
+def _require_user_access(user_id: str, token: str = None, request: Request = None) -> str:
+    uid = _sanitize_user_id(user_id)
+    if not _is_valid_user_token(uid, token, request=request):
+        raise HTTPException(status_code=403, detail="Forbidden user_id access")
+    return uid
+
+async def _get_user_session(user_id: str) -> ChatSession:
+    uid = _sanitize_user_id(user_id)
+    if uid in user_sessions:
+        return user_sessions[uid]
+
+    history_repo = history_repo_global
+    if history_repo is None:
+        if identity_config.chat_history_backend == "sql":
+            from memory.history.repository import SqlHistoryRepository
+            history_repo = SqlHistoryRepository()
+        else:
+            from memory.history.repository import ChromaHistoryRepository
+            history_repo = ChromaHistoryRepository()
+
+    user_session = ChatSession(session_id=f"session_{uid}", user_id=uid, history_repo=history_repo)
+    await user_session.restore_from_repo()
+    user_sessions[uid] = user_session
+    return user_session
+
 @app.get("/")
 async def get_chat():
     return FileResponse(os.path.join(FRONTEND_DIR, "chat_interaction.html"))
@@ -862,14 +941,52 @@ async def get_chat():
 async def get_monitor():
     return FileResponse(os.path.join(FRONTEND_DIR, "data_monitor.html"))
 
+@app.post("/api/users/demo")
+async def create_demo_user():
+    user_id = f"demo_{secrets.token_urlsafe(16).replace('-', '').replace('_', '')[:22]}"
+    user_token = _sign_user_id(user_id)
+    user_session = await _get_user_session(user_id)
+    try:
+        p_manager = PersonaManager()
+        await p_manager.bootstrap_genesis_identities(user_id)
+        await p_manager.close()
+    except Exception as exc:
+        logger.warning("[DemoUser] bootstrap failed for %s: %s", user_id, exc)
+    return {
+        "status": "success",
+        "user_id": user_id,
+        "user_token": user_token,
+        "chat_url": f"/?user_id={user_id}&user_token={user_token}",
+        "monitor_url": f"/monitor?user_id={user_id}&user_token={user_token}",
+        "session_id": user_session.session_id,
+    }
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    if not _is_ws_authorized(websocket):
+    requested_user_id = (
+        websocket.query_params.get("user_id")
+        or websocket.query_params.get("uid")
+        or websocket.query_params.get("owner_id")
+        or websocket.query_params.get("sandbox_id")
+        or identity_config.user_id
+    )
+    active_user_id = _sanitize_user_id(requested_user_id)
+    user_token = websocket.query_params.get("user_token") or websocket.query_params.get("access_token")
+    if not (_is_ws_authorized(websocket) or _is_valid_user_token(active_user_id, user_token, websocket=websocket)):
         await websocket.close(code=1008, reason="unauthorized")
         return
     await websocket.accept()
     active_connections.add(websocket)
     global engine, session, global_db_driver
+    ws_session = await _get_user_session(active_user_id)
+
+    async def send_ws(message: dict):
+        if (
+            websocket.client_state == WebSocketState.CONNECTED
+            and websocket.application_state == WebSocketState.CONNECTED
+        ):
+            await websocket.send_json(clean_neo4j_data(message))
+
     missing = _runtime_missing_components()
     if missing:
         await websocket.send_json({
@@ -903,7 +1020,7 @@ async def websocket_endpoint(websocket: WebSocket):
         try:
             async with global_db_driver.session(database=neo4j_config.database) as neosession:
                 query = (
-                    "MATCH (s:Entity)-[:ACTOR_IN]->(e:Event {owner_id: $uid}) "
+                    "MATCH (s:Entity {owner_id: $uid})-[:ACTOR_IN]->(e:Event {owner_id: $uid}) "
                     "WHERE (e.status = 'active' OR e.status IS NULL) AND e.invalid_at IS NULL "
                     "OPTIONAL MATCH (obj_ent:Entity {owner_id: $uid})-[:OBJECT_OF]->(e) "
                     "OPTIONAL MATCH (src:Entity {owner_id: $uid})-[said:SAID]->(e) "
@@ -911,7 +1028,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     "said.trust_score AS trust, properties(e) AS props "
                     "ORDER BY COALESCE(e.record_time, e.created_at) DESC LIMIT 50"
                 )
-                evt_res = await neosession.run(query, uid=identity_config.user_id)
+                evt_res = await neosession.run(query, uid=active_user_id)
                 event_facts = []
                 async for r in evt_res:
                     try:
@@ -939,7 +1056,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
                 # Include non-event cognitive facts (v3 persona/efstb oriented) in the same audit stream.
                 fact_query = (
-                    "MATCH (u:Entity {entity_id: $uid})-[:HAS_FACT]->(f:Fact {owner_id: $uid}) "
+                    "MATCH (u:Entity {entity_id: $uid, owner_id: $uid})-[:HAS_FACT]->(f:Fact {owner_id: $uid}) "
                     "WHERE toLower(coalesce(f.predicate, '')) IN $predicates "
                     "RETURN COALESCE(u.primary_name, u.name, u.entity_id) AS sub, properties(f) AS props "
                     "ORDER BY COALESCE(f.updated_at, f.created_at) DESC LIMIT 50"
@@ -957,7 +1074,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 ]
                 fact_res = await neosession.run(
                     fact_query,
-                    uid=identity_config.user_id,
+                    uid=active_user_id,
                     predicates=fact_predicates,
                 )
                 async for fr in fact_res:
@@ -989,29 +1106,29 @@ async def websocket_endpoint(websocket: WebSocket):
                 invalidated_facts = []
                 if INCLUDE_INVALIDATED:
                     inval_query = (
-                        "MATCH (s:Entity)-[:ACTOR_IN]->(e:Event {owner_id: $uid, status: 'invalidated'}) "
+                        "MATCH (s:Entity {owner_id: $uid})-[:ACTOR_IN]->(e:Event {owner_id: $uid, status: 'invalidated'}) "
                         "RETURN s.name AS sub, properties(e) AS props "
                         "ORDER BY e.invalid_at DESC LIMIT 20"
                     )
-                    inval_res = await neosession.run(inval_query, uid=identity_config.user_id)
+                    inval_res = await neosession.run(inval_query, uid=active_user_id)
                     async for ir in inval_res:
                          ip = dict(ir.get('props') or {})
                          ip['subject'] = ir.get('sub') or "Unknown"
                          invalidated_facts.append(ip)
 
                 ent_props = {}
-                ent_res_meta = await neosession.run("MATCH (e:Entity {owner_id: $uid}) RETURN e", uid=identity_config.user_id)
+                ent_res_meta = await neosession.run("MATCH (e:Entity {owner_id: $uid}) RETURN e", uid=active_user_id)
                 async for row in ent_res_meta:
                     node = row['e']
                     ent_props[node.get('name', 'Unknown')] = dict(node)
 
                 rel_query = (
-                    "MATCH (a:Entity)-[r:RELATION]->(b:Entity) "
+                    "MATCH (a:Entity {owner_id: $uid})-[r:RELATION]->(b:Entity {owner_id: $uid}) "
                     "WHERE r.owner_id = $uid AND (r.status = 'active' OR r.status IS NULL) "
                     "RETURN a.name AS from, r.type AS rel, b.name AS to, properties(r) AS props "
                     "ORDER BY COALESCE(r.record_time, r.created_at) DESC LIMIT 50"
                 )
-                rel_res = await neosession.run(rel_query, uid=identity_config.user_id)
+                rel_res = await neosession.run(rel_query, uid=active_user_id)
                 rel_facts = []
                 async for r in rel_res:
                     rd = r.data()
@@ -1024,7 +1141,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     "WHERE r.status = 'active' OR r.status IS NULL "
                     "RETURN a.name as sub, r.type as rel, b.name as obj"
                 )
-                ent_rel_res = await neosession.run(ent_rel_query, uid=identity_config.user_id)
+                ent_rel_res = await neosession.run(ent_rel_query, uid=active_user_id)
                 async for row in ent_rel_res:
                     s_name, r_type, o_name = row['sub'], row['rel'], row['obj']
                     long_id = f"{s_name} -> {r_type} -> {o_name}"
@@ -1040,7 +1157,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         }
                     })
 
-                ent_res = await neosession.run("MATCH (e:Entity {owner_id: $uid}) RETURN e.name as name", uid=identity_config.user_id)
+                ent_res = await neosession.run("MATCH (e:Entity {owner_id: $uid}) RETURN e.name as name", uid=active_user_id)
                 async for er in ent_res:
                     e_name = er['name']
                     if not any(f.get('sub') == e_name or f.get('obj') == e_name for f in event_facts):
@@ -1062,7 +1179,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     "COALESCE(a.role, a.current_role) AS a_role, "
                     "a.age AS a_age, a.gender AS a_gender"
                 )
-                prof_res = await neosession.run(prof_query, uid=identity_config.user_id, aid=identity_config.assistant_id)
+                prof_res = await neosession.run(prof_query, uid=active_user_id, aid=identity_config.assistant_id)
                 prof_record = await prof_res.single()
                 
                 obs_facts = []
@@ -1080,56 +1197,56 @@ async def websocket_endpoint(websocket: WebSocket):
             try:
                 from memory.identity.manager import PersonaManager
                 p_manager = PersonaManager()
-                up = await p_manager.get_user_profile(identity_config.user_id)
+                up = await p_manager.get_user_profile(active_user_id)
                 ident = up.identity or {}
                 
                 user_profile_struct = p_manager.serialize_user_profile(up)
                 
-                assistant_profile_struct = await p_manager.get_assistant_profile_struct(identity_config.user_id)
+                assistant_profile_struct = await p_manager.get_assistant_profile_struct(active_user_id)
 
                 # Deprecated observation categories (trait/preference/goal/...) are removed.
                 # Sync payload observations are rebuilt later with v3-only categories.
                 
                 if not user_profile_struct.get("name"):
-                    user_profile_struct["name"] = session.context_canvas.get("user_real_name") or user_name
+                    user_profile_struct["name"] = ws_session.context_canvas.get("user_real_name") or user_name
                 if not user_profile_struct.get("primary_name"):
-                    user_profile_struct["primary_name"] = user_profile_struct.get("name") or session.context_canvas.get("user_real_name") or user_name
+                    user_profile_struct["primary_name"] = user_profile_struct.get("name") or ws_session.context_canvas.get("user_real_name") or user_name
                 if not user_profile_struct.get("aliases"):
-                    user_profile_struct["aliases"] = list(session.context_canvas.get("user_aliases") or [])
+                    user_profile_struct["aliases"] = list(ws_session.context_canvas.get("user_aliases") or [])
                 if not user_profile_struct.get("age") and prof_record:
                     user_profile_struct["age"] = prof_record.get("u_age") or ""
                 if not user_profile_struct.get("age"):
-                    user_profile_struct["age"] = session.context_canvas.get("user_age") or ""
+                    user_profile_struct["age"] = ws_session.context_canvas.get("user_age") or ""
                 if not user_profile_struct.get("gender") and prof_record:
                     user_profile_struct["gender"] = prof_record.get("u_gender") or ""
                 if not user_profile_struct.get("gender"):
-                    user_profile_struct["gender"] = session.context_canvas.get("user_gender") or ""
+                    user_profile_struct["gender"] = ws_session.context_canvas.get("user_gender") or ""
                 if not user_profile_struct.get("role"):
-                    user_profile_struct["role"] = session.context_canvas.get("user_role") or ""
+                    user_profile_struct["role"] = ws_session.context_canvas.get("user_role") or ""
 
                 if not user_profile_struct.get("mbti_label"):
-                    user_profile_struct["mbti_label"] = session.context_canvas.get("mbti_label") or ""
+                    user_profile_struct["mbti_label"] = ws_session.context_canvas.get("mbti_label") or ""
                 if not user_profile_struct.get("big_five"):
                     _canvas_bf = {
-                        "openness":          session.context_canvas.get("big_five_openness"),
-                        "conscientiousness": session.context_canvas.get("big_five_conscientiousness"),
-                        "extraversion":      session.context_canvas.get("big_five_extraversion"),
-                        "agreeableness":     session.context_canvas.get("big_five_agreeableness"),
-                        "neuroticism":       session.context_canvas.get("big_five_neuroticism"),
+                        "openness":          ws_session.context_canvas.get("big_five_openness"),
+                        "conscientiousness": ws_session.context_canvas.get("big_five_conscientiousness"),
+                        "extraversion":      ws_session.context_canvas.get("big_five_extraversion"),
+                        "agreeableness":     ws_session.context_canvas.get("big_five_agreeableness"),
+                        "neuroticism":       ws_session.context_canvas.get("big_five_neuroticism"),
                     }
                     if any(v is not None for v in _canvas_bf.values()):
                         user_profile_struct["big_five"] = {
                             k: round(float(v), 3) for k, v in _canvas_bf.items() if v is not None
                         }
                 if not user_profile_struct.get("values"):
-                    user_profile_struct["values"] = list(session.context_canvas.get("user_core_values") or [])
+                    user_profile_struct["values"] = list(ws_session.context_canvas.get("user_core_values") or [])
 
                 if not assistant_profile_struct.get("name"):
-                    assistant_profile_struct["name"] = session.context_canvas.get("assistant_real_name") or asst_name
+                    assistant_profile_struct["name"] = ws_session.context_canvas.get("assistant_real_name") or asst_name
                 if not assistant_profile_struct.get("persona"):
                     assistant_profile_struct["persona"] = (
-                        session.context_canvas.get("assistant_profile")
-                        or session.context_canvas.get("assistant_prompt_profile")
+                        ws_session.context_canvas.get("assistant_profile")
+                        or ws_session.context_canvas.get("assistant_prompt_profile")
                         or asst_persona
                     )
                 if not assistant_profile_struct.get("role") and prof_record:
@@ -1139,13 +1256,13 @@ async def websocket_endpoint(websocket: WebSocket):
                 if not assistant_profile_struct.get("gender") and prof_record:
                     assistant_profile_struct["gender"] = prof_record.get("a_gender") or ""
                 if not assistant_profile_struct.get("role"):
-                    assistant_profile_struct["role"] = session.context_canvas.get("assistant_current_role") or ""
+                    assistant_profile_struct["role"] = ws_session.context_canvas.get("assistant_current_role") or ""
                 if not assistant_profile_struct.get("age"):
-                    assistant_profile_struct["age"] = session.context_canvas.get("assistant_age") or ""
+                    assistant_profile_struct["age"] = ws_session.context_canvas.get("assistant_age") or ""
                 if not assistant_profile_struct.get("gender"):
-                    assistant_profile_struct["gender"] = session.context_canvas.get("assistant_gender") or ""
+                    assistant_profile_struct["gender"] = ws_session.context_canvas.get("assistant_gender") or ""
                 if not assistant_profile_struct.get("relationship_to_user"):
-                    assistant_profile_struct["relationship_to_user"] = session.context_canvas.get("assistant_relationship_to_user") or ""
+                    assistant_profile_struct["relationship_to_user"] = ws_session.context_canvas.get("assistant_relationship_to_user") or ""
                 
                 parts = []
                 UNKNOWN = 'unknown'
@@ -1172,7 +1289,7 @@ async def websocket_endpoint(websocket: WebSocket):
                             continue
                     if bf_parts:
                         parts.append("BigFive: " + ", ".join(bf_parts))
-                efstb_tags = session.context_canvas.get("latest_efstb_tags") or {}
+                efstb_tags = ws_session.context_canvas.get("latest_efstb_tags") or {}
                 if efstb_tags:
                     parts.append(
                 "EFSTB: "
@@ -1254,7 +1371,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 )
 
             processed_rag = []
-            raw_rag = session.context_canvas.get("rag_context_structured", [])
+            raw_rag = ws_session.context_canvas.get("rag_context_structured", [])
             for item in raw_rag:
                 normalized_item = _normalize_rag_item(item)
                 if normalized_item:
@@ -1293,19 +1410,19 @@ async def websocket_endpoint(websocket: WebSocket):
                         out.append(text)
                 return out
 
-            session_user_name = _clean_scalar(session.context_canvas.get("user_real_name"))
-            session_user_aliases = _clean_list(session.context_canvas.get("user_aliases") or [])
-            session_user_age = _clean_scalar(session.context_canvas.get("user_age"))
-            session_user_gender = _clean_scalar(session.context_canvas.get("user_gender"))
-            session_user_role = _clean_scalar(session.context_canvas.get("user_role"))
+            session_user_name = _clean_scalar(ws_session.context_canvas.get("user_real_name"))
+            session_user_aliases = _clean_list(ws_session.context_canvas.get("user_aliases") or [])
+            session_user_age = _clean_scalar(ws_session.context_canvas.get("user_age"))
+            session_user_gender = _clean_scalar(ws_session.context_canvas.get("user_gender"))
+            session_user_role = _clean_scalar(ws_session.context_canvas.get("user_role"))
 
-            session_asst_name = _clean_scalar(session.context_canvas.get("assistant_real_name"))
-            session_asst_aliases = _clean_list(session.context_canvas.get("assistant_aliases") or [])
-            session_asst_age = _clean_scalar(session.context_canvas.get("assistant_age"))
-            session_asst_gender = _clean_scalar(session.context_canvas.get("assistant_gender"))
-            session_asst_role = _clean_scalar(session.context_canvas.get("assistant_current_role"))
-            session_asst_persona = _clean_scalar(session.context_canvas.get("assistant_prompt_profile"))
-            session_asst_relationship = _clean_scalar(session.context_canvas.get("assistant_relationship_to_user"))
+            session_asst_name = _clean_scalar(ws_session.context_canvas.get("assistant_real_name"))
+            session_asst_aliases = _clean_list(ws_session.context_canvas.get("assistant_aliases") or [])
+            session_asst_age = _clean_scalar(ws_session.context_canvas.get("assistant_age"))
+            session_asst_gender = _clean_scalar(ws_session.context_canvas.get("assistant_gender"))
+            session_asst_role = _clean_scalar(ws_session.context_canvas.get("assistant_current_role"))
+            session_asst_persona = _clean_scalar(ws_session.context_canvas.get("assistant_prompt_profile"))
+            session_asst_relationship = _clean_scalar(ws_session.context_canvas.get("assistant_relationship_to_user"))
 
             user_profile_struct["name"] = (
                 session_user_name
@@ -1385,10 +1502,10 @@ async def websocket_endpoint(websocket: WebSocket):
 
             state_text = (user_profile_struct.get("state") or "").strip()
             if (
-                any(marker in state_text for marker in ["\ufffd", "锟"])
+                "\ufffd" in state_text
                 and not any(
                     token in state_text
-                    for token in ["Normal", "Active", "正常", "稳定", "活跃", "低落", "焦虑"]
+                    for token in ["Normal", "Active", "姝ｅ父", "绋冲畾", "娲昏穬", "浣庤惤", "鐒﹁檻"]
                 )
             ):
                 user_profile_struct["state"] = ""
@@ -1448,7 +1565,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     source="profile_graph",
                 )
 
-            efstb_tags = session.context_canvas.get("latest_efstb_tags") or {}
+            efstb_tags = ws_session.context_canvas.get("latest_efstb_tags") or {}
             if isinstance(efstb_tags, dict) and efstb_tags:
                 efstb_line = ", ".join(
                     [
@@ -1481,9 +1598,11 @@ async def websocket_endpoint(websocket: WebSocket):
                     confidence=0.78,
                     source="profile_graph",
                 )
-            monitor_history = await _load_monitor_dialogue_stream(identity_config.user_id)
+            monitor_history = await _load_monitor_dialogue_stream(active_user_id)
             payload = clean_neo4j_data({
                 "type": "global_sync", 
+                "user_id": active_user_id,
+                "owner_id": active_user_id,
                 "profile_protocol_version": 2, 
                 "user_name": user_name,
                 "user_root_profile_struct": user_profile_struct,
@@ -1516,17 +1635,17 @@ async def websocket_endpoint(websocket: WebSocket):
                 "rel_all": rel_facts or [],
                 "obs_all": obs_facts or [],
                 "rag_all": processed_rag,
-                "retrieval_audit": session.context_canvas.get("retrieval_audit") or {
+                "retrieval_audit": ws_session.context_canvas.get("retrieval_audit") or {
                     "mode": "hybrid_baseline",
                     "bm25_enabled": KnowledgeBaseEngine().is_bm25_enabled,
                     "sources": {"graph": 0, "episode": 0, "saga": 0, "vector": 0, "bm25": 0},
                     "result_count": 0
                 },
-                "time_window_audit": (session.context_canvas.get("retrieval_audit") or {}).get("latency_ms", {}).get("time_window", {"enabled": False}),
-                "resolution_audit": session.context_canvas.get("resolution_audit", []),
+                "time_window_audit": (ws_session.context_canvas.get("retrieval_audit") or {}).get("latency_ms", {}).get("time_window", {"enabled": False}),
+                "resolution_audit": ws_session.context_canvas.get("resolution_audit", []),
                 "history": monitor_history or _session_history_payload(),
-                "conflict_audit": session.identity_state.get("conflict_trace", {}),
-                "identity_inference_status": session.context_canvas.get("identity_inference_status") or {},
+                "conflict_audit": ws_session.identity_state.get("conflict_trace", {}),
+                "identity_inference_status": ws_session.context_canvas.get("identity_inference_status") or {},
                 "crm_sync_status": "enabled" if identity_config.enable_crm_sync else "disabled",
                 "crm_conflict_audit": crm_audit_cache,
                 "crm_replay_stats": crm_replay_stats
@@ -1556,7 +1675,7 @@ async def websocket_endpoint(websocket: WebSocket):
             user_input = msg.get("text", "")
             if not user_input: continue
 
-            await broadcast({"type": "user_input", "text": user_input})
+            await send_ws({"type": "user_input", "text": user_input})
 
             async def ws_status_callback(step, status, time_ms=None, tokens=None, prompt=None, path=None, reason=None):
                 payload = {
@@ -1576,66 +1695,66 @@ async def websocket_endpoint(websocket: WebSocket):
                     )
                 if prompt:
                     payload["prompt"] = prompt
-                await broadcast(payload)
+                await send_ws(payload)
 
                 if step == "01" and status == "done":
-                    assistant_struct = session.context_canvas.get("assistant_profile_struct", {})
-                    user_name_hint = session.context_canvas.get("user_real_name")
-                    await broadcast({
+                    assistant_struct = ws_session.context_canvas.get("assistant_profile_struct", {})
+                    user_name_hint = ws_session.context_canvas.get("user_real_name")
+                    await send_ws({
                         "type": "memory_sync",
-                        "persona_status": session.context_canvas.get("persona_status", "active"),
-                        "vector_status": session.context_canvas.get("vector_status", "active"),
-                        "asst_name": session.context_canvas.get("assistant_real_name"),
-                        "asst_persona": session.context_canvas.get("assistant_profile"),
+                        "persona_status": ws_session.context_canvas.get("persona_status", "active"),
+                        "vector_status": ws_session.context_canvas.get("vector_status", "active"),
+                        "asst_name": ws_session.context_canvas.get("assistant_real_name"),
+                        "asst_persona": ws_session.context_canvas.get("assistant_profile"),
                         "assistant_root_profile_struct": assistant_struct,
                         "assistant_profile_struct": assistant_struct,
                         "user_name": user_name_hint,
                         "user_root_profile_struct": {
                             "name": user_name_hint or "",
                             "primary_name": user_name_hint or "",
-                            "aliases": list(session.context_canvas.get("user_aliases") or []),
-                            "age": session.context_canvas.get("user_age") or "",
-                            "gender": session.context_canvas.get("user_gender") or "",
-                            "role": session.context_canvas.get("user_role") or "",
+                            "aliases": list(ws_session.context_canvas.get("user_aliases") or []),
+                            "age": ws_session.context_canvas.get("user_age") or "",
+                            "gender": ws_session.context_canvas.get("user_gender") or "",
+                            "role": ws_session.context_canvas.get("user_role") or "",
                         },
-                        "user_profile": session.context_canvas.get("user_profile", "(no profile)")
+                        "user_profile": ws_session.context_canvas.get("user_profile", "(no profile)")
                     })
 
                 if step == "06" and status == "done":
-                    assistant_struct = session.context_canvas.get("assistant_profile_struct", {})
-                    user_name_hint = session.context_canvas.get("user_real_name")
-                    await broadcast({
+                    assistant_struct = ws_session.context_canvas.get("assistant_profile_struct", {})
+                    user_name_hint = ws_session.context_canvas.get("user_real_name")
+                    await send_ws({
                         "type": "memory_sync",
                         "assistant_root_profile_struct": assistant_struct,
                         "assistant_profile_struct": assistant_struct,
                         "user_root_profile_struct": {
                             "name": user_name_hint or "",
                             "primary_name": user_name_hint or "",
-                            "aliases": list(session.context_canvas.get("user_aliases") or []),
-                            "age": session.context_canvas.get("user_age") or "",
-                            "gender": session.context_canvas.get("user_gender") or "",
-                            "role": session.context_canvas.get("user_role") or "",
+                            "aliases": list(ws_session.context_canvas.get("user_aliases") or []),
+                            "age": ws_session.context_canvas.get("user_age") or "",
+                            "gender": ws_session.context_canvas.get("user_gender") or "",
+                            "role": ws_session.context_canvas.get("user_role") or "",
                         },
-                        "rag_content": [_normalize_rag_item(item) for item in session.context_canvas.get("rag_context_structured", []) if _normalize_rag_item(item)],
-                        "retrieval_audit": session.context_canvas.get("retrieval_audit", {})
+                        "rag_content": [_normalize_rag_item(item) for item in ws_session.context_canvas.get("rag_context_structured", []) if _normalize_rag_item(item)],
+                        "retrieval_audit": ws_session.context_canvas.get("retrieval_audit", {})
                     })
 
             full_ai_response = ""
-            async for chunk in engine.chat_stream(user_input, session, status_callback=ws_status_callback):
+            async for chunk in engine.chat_stream(user_input, ws_session, status_callback=ws_status_callback):
                 full_ai_response += chunk
-                await broadcast({"type": "chunk", "text": chunk})
+                await send_ws({"type": "chunk", "text": chunk})
 
-            session.context_canvas["vector_status"] = "active"
+            ws_session.context_canvas["vector_status"] = "active"
 
             # Auto mode: run personality re-inference every N conversation turns.
-            turn_count = int(session.context_canvas.get("inference_turn_count", 0) or 0)
+            turn_count = int(ws_session.context_canvas.get("inference_turn_count", 0) or 0)
             if (turn_count % INFERENCE_AUTO_INTERVAL) == 0:
                 import time
                 infer_start = time.perf_counter()
                 await ws_status_callback("13", "doing", reason="auto_turn")
                 await ws_status_callback("14", "doing", reason="auto_turn")
                 auto_infer = await run_identity_reinference(
-                    identity_config.user_id,
+                    active_user_id,
                     force=False,
                     source="auto_turn",
                 )
@@ -1675,7 +1794,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     time_ms=0,
                     reason=f"interval_pending:{auto_infer['rounds_left']}",
                 )
-            session.context_canvas["identity_inference_status"] = auto_infer
+            ws_session.context_canvas["identity_inference_status"] = auto_infer
 
             await asyncio.sleep(0.3)
             await sync_all()
@@ -1690,10 +1809,10 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.error("WS Main Loop Error: %r", e)
 
 @app.get("/cdc/changes")
-async def get_cdc_changes(since: int = 0, limit: int = 200, uid: str = None):
+async def get_cdc_changes(request: Request, since: int = 0, limit: int = 200, uid: str = None, user_id: str = None, user_token: str = None):
     """Fetch CDC incremental changes since a version."""
     from memory.integration.cdc_outbox import outbox
-    owner_id = uid or identity_config.user_id
+    owner_id = _require_user_access(user_id or uid, user_token, request=request)
     
     changes = outbox.list_changes_since(owner_id, since, limit)
     latest = outbox.get_latest_version(owner_id)
@@ -1708,8 +1827,10 @@ async def get_cdc_changes(since: int = 0, limit: int = 200, uid: str = None):
     }
 
 @app.get("/maintenance/compaction-report")
-async def get_compaction_report():
+async def get_compaction_report(request: Request):
     """Read the latest graph compaction report."""
+    if not _is_maintenance_authorized(request):
+        raise HTTPException(status_code=401, detail="Unauthorized maintenance request")
     report_path = ".data/compaction_report.json"
     if not os.path.exists(report_path):
         return {"status": "no_report", "message": "compaction report not found"}
@@ -1720,24 +1841,28 @@ async def get_compaction_report():
         return {"status": "error", "message": str(e)}
 
 @app.post("/cdc/ack")
-async def ack_cdc_version(consumer_id: str, owner_id: str, version: int):
+async def ack_cdc_version(request: Request, consumer_id: str, owner_id: str, version: int, user_token: str = None):
     """L2: Update CDC consumer checkpoint."""
-    new_v = checkpoint_manager.ack_checkpoint(consumer_id, owner_id, version)
+    authorized_owner_id = _require_user_access(owner_id, user_token, request=request)
+    new_v = checkpoint_manager.ack_checkpoint(consumer_id, authorized_owner_id, version)
     return {"status": "success", "current_version": new_v}
 
 @app.post("/identity/reinfer")
-async def identity_reinfer(force: bool = False):
+async def identity_reinfer(request: Request, force: bool = False, user_id: str = None, uid: str = None, user_token: str = None):
     """Manual trigger for personality re-inference."""
+    target_uid = _require_user_access(user_id or uid, user_token, request=request)
     result = await run_identity_reinference(
-        identity_config.user_id,
+        target_uid,
         force=force,
         source="manual_api",
     )
     return result
 
 @app.post("/crm/upsert")
-async def crm_upsert(req: CRMUpsertRequest):
+async def crm_upsert(req: CRMUpsertRequest, request: Request):
     """L3: Inbound upsert with conflict arbitration."""
+    if not _is_maintenance_authorized(request):
+        raise HTTPException(status_code=401, detail="Unauthorized maintenance request")
     if not identity_config.enable_crm_sync:
         return {"status": "disabled", "message": "CRM sync disabled"}
     
@@ -1798,8 +1923,10 @@ async def crm_upsert(req: CRMUpsertRequest):
     return {"status": "success", "results": results}
 
 @app.post("/crm/events/replay")
-async def crm_replay(req: CRMReplayRequest):
+async def crm_replay(req: CRMReplayRequest, request: Request):
     """L4: Replay historical CRM events with idempotency checks."""
+    if not _is_maintenance_authorized(request):
+        raise HTTPException(status_code=401, detail="Unauthorized maintenance request")
     processed = 0
     skipped = 0
     failed = 0
@@ -1811,7 +1938,7 @@ async def crm_replay(req: CRMReplayRequest):
             continue
         
         try:
-            resp = await crm_upsert(CRMUpsertRequest(changes=[change]))
+            resp = await crm_upsert(CRMUpsertRequest(changes=[change]), request)
             if resp.get("status") == "success":
                 checkpoint_manager.mark_replayed(key)
                 processed += 1
@@ -1827,12 +1954,13 @@ async def crm_replay(req: CRMReplayRequest):
     return {"status": "finished", "processed": processed, "skipped": skipped, "failed": failed}
 
 @app.post("/evolution/rollback/{event_id}")
-async def rollback_evolution(event_id: str):
+async def rollback_evolution(event_id: str, request: Request, user_id: str = None, user_token: str = None):
     """Rollback a recent identity evolution event."""
     async with global_db_driver.session(database=neo4j_config.database) as db:
         tx = await db.begin_transaction()
         try:
-            res = await tx.run("MATCH (e:Event {event_id: $eid}) RETURN e", eid=event_id)
+            uid = _require_user_access(user_id, user_token, request=request)
+            res = await tx.run("MATCH (e:Event {event_id: $eid, owner_id: $uid}) RETURN e", eid=event_id, uid=uid)
             evt = await res.single()
             if not evt: 
                 await tx.rollback()
@@ -1849,7 +1977,6 @@ async def rollback_evolution(event_id: str):
                 await tx.rollback()
                 return {"status": "error", "message": "Invalid metadata for rollback"}
             
-            uid = identity_config.user_id
             await tx.run("""
                 MATCH (e:Event {event_id: $eid, owner_id: $uid})
                 SET e.status = 'rolled_back', e.invalid_at = timestamp()
@@ -1869,6 +1996,8 @@ from pydantic import BaseModel
 class WipeRequest(BaseModel):
     # Default to cognitive-only wipe to avoid accidental KB deletion
     items: list[str] = ["cognitive"]
+    user_id: str = None
+    user_token: str = None
 
 @app.post("/maintenance/wipe-memory")
 async def wipe_memory(req: WipeRequest, request: Request):
@@ -1876,7 +2005,7 @@ async def wipe_memory(req: WipeRequest, request: Request):
     if not _is_maintenance_authorized(request):
         raise HTTPException(status_code=401, detail="Unauthorized maintenance request")
     global engine, session, global_db_driver
-    uid = identity_config.user_id
+    uid = _require_user_access(req.user_id, req.user_token, request=request)
     wipe_cognitive = "cognitive" in req.items
     wipe_knowledge = "knowledge" in req.items
     
@@ -1892,27 +2021,37 @@ async def wipe_memory(req: WipeRequest, request: Request):
             
             from memory.sql.pool import get_db
             async with get_db() as conn:
-                await conn.execute("DELETE FROM ef_chat_messages")
-                await conn.execute("DELETE FROM ef_chat_sessions")
+                is_sqlite = "sqlite" in str(type(conn)).lower()
+                if is_sqlite:
+                    await conn.execute(
+                        "DELETE FROM ef_chat_messages WHERE session_id IN (SELECT session_id FROM ef_chat_sessions WHERE user_id = ?)",
+                        (uid,),
+                    )
+                    await conn.execute("DELETE FROM ef_chat_sessions WHERE user_id = ?", (uid,))
+                else:
+                    await conn.execute(
+                        "DELETE FROM ef_chat_messages WHERE session_id IN (SELECT session_id FROM ef_chat_sessions WHERE user_id = $1)",
+                        uid,
+                    )
+                    await conn.execute("DELETE FROM ef_chat_sessions WHERE user_id = $1", uid)
                 await conn.commit()
             
-            session.history = []
+            if uid in user_sessions:
+                user_sessions[uid].history = []
             results.append('cognitive memory cleared')
 
         if wipe_knowledge:
             from memory.vector.storer import VectorStorer
             v_storer = VectorStorer()
             try:
-                v_storer.client.delete_collection(v_storer.chat_collection.name)
-                v_storer.chat_collection = v_storer.client.get_or_create_collection(
-                    name=v_storer._collection_name,
-                    embedding_function=v_storer._embedding_fn
-                )
+                v_storer.chat_collection.delete(where={"user_id": uid})
+                v_storer.doc_collection.delete(where={"user_id": uid})
             except Exception as ve:
                 logger.warning(f"Vector wipe failed partly: {ve}")
             results.append('knowledge base cleared')
         
-        session.context_canvas = {"vector_status": "active"}
+        if uid in user_sessions:
+            user_sessions[uid].context_canvas = {"vector_status": "active"}
         return {"status": "success", "message": " | ".join(results) or "no wipe item selected"}
     except Exception as e:
         logger.error(f"Selective wipe failed: {e}")
@@ -1983,10 +2122,11 @@ async def restore_demo_data(request: Request):
 from fastapi import UploadFile, File, Form
 
 @app.get("/kb/list")
-async def list_knowledge_base():
+async def list_knowledge_base(request: Request, user_id: str = None, user_token: str = None):
     from memory.vector.storer import VectorStorer
+    uid = _require_user_access(user_id, user_token, request=request)
     storer = VectorStorer()
-    res = storer.doc_collection.get(include=["metadatas"])
+    res = storer.doc_collection.get(where={"user_id": uid}, include=["metadatas"])
     sources = set()
     for meta in res.get("metadatas", []):
         if meta and "source" in meta:
@@ -1994,8 +2134,9 @@ async def list_knowledge_base():
     return {"status": "success", "files": list(sources)}
 
 @app.post("/kb/upload")
-async def upload_knowledge_base(file: UploadFile = File(...), chunk_size: int = Form(1000)):
+async def upload_knowledge_base(request: Request, file: UploadFile = File(...), chunk_size: int = Form(1000), user_id: str = Form(None), user_token: str = Form(None)):
     try:
+        uid = _require_user_access(user_id, user_token, request=request)
         content = await file.read()
         try:
             text = content.decode('utf-8')
@@ -2009,9 +2150,9 @@ async def upload_knowledge_base(file: UploadFile = File(...), chunk_size: int = 
         from memory.identity.resolver import Actor
         overlap = min(chunk_size // 4, 300)
         devourer = DocumentDevourer(chunk_size=chunk_size, overlap=overlap)
-        actor = Actor(speaker_id="user", speaker_name="User", target_id="assistant", target_name="AI")
+        actor = Actor(speaker_id=uid, speaker_name="User", target_id="assistant", target_name="AI")
         
-        result = await devourer.devour(text, source_name=file.filename, actor=actor, extract_graph=False)
+        result = await devourer.devour(text, source_name=file.filename, actor=actor, user_id=uid, extract_graph=False)
         chunks = result.get("chunks_stored", "?")
         return {"status": "success", "message": f"Uploaded {file.filename} in {chunks} chunks (chunk_size={chunk_size})."}
     except Exception as e:
@@ -2021,23 +2162,27 @@ async def upload_knowledge_base(file: UploadFile = File(...), chunk_size: int = 
 
 class KBDeleteRequest(BaseModel):
     filename: str
+    user_id: str = None
+    user_token: str = None
 
 @app.post("/kb/delete")
-async def delete_kb_file(req: KBDeleteRequest):
+async def delete_kb_file(req: KBDeleteRequest, request: Request, user_id: str = None, user_token: str = None):
     from memory.vector.storer import VectorStorer
+    uid = _require_user_access(req.user_id or user_id, req.user_token or user_token, request=request)
     storer = VectorStorer()
     try:
-        storer.doc_collection.delete(where={"source": req.filename})
+        storer.doc_collection.delete(where={"$and": [{"source": req.filename}, {"user_id": uid}]})
         return {"status": "success", "message": f"{req.filename} deleted"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
 @app.post("/kb/clear")
-async def clear_knowledge_base():
+async def clear_knowledge_base(request: Request, user_id: str = None, user_token: str = None):
     from memory.vector.storer import VectorStorer
+    uid = _require_user_access(user_id, user_token, request=request)
     storer = VectorStorer()
     try:
-        res = storer.doc_collection.get(include=[])
+        res = storer.doc_collection.get(where={"user_id": uid}, include=[])
         if res and res["ids"]:
             storer.doc_collection.delete(ids=res["ids"])
         return {"status": "success", "message": "knowledge base cleared"}
@@ -2045,7 +2190,7 @@ async def clear_knowledge_base():
         return {"status": "error", "message": str(e)}
 
 @app.get("/monitor/stats")
-async def get_monitor_stats():
+async def get_monitor_stats(request: Request, user_id: str = None, user_token: str = None):
     """Get monitor metrics for identity evolution."""
     if global_db_driver is None:
         return {
@@ -2056,7 +2201,7 @@ async def get_monitor_stats():
             "rollback_count": 0,
         }
     async with global_db_driver.session(database=neo4j_config.database) as db:
-        uid = identity_config.user_id
+        uid = _require_user_access(user_id, user_token, request=request)
         res = await db.run(
             "MATCH (e:Event {predicate: 'IDENTITY_EVOLVED', owner_id: $uid}) "
             "WITH count(e) as total_conflicts, "

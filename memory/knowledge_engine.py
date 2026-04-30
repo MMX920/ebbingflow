@@ -98,10 +98,11 @@ class KnowledgeBaseEngine:
     async def fetch_identities(self, session):
         """Warm-up fetch for canonical user/assistant names from graph."""
         try:
+            uid = getattr(session, "user_id", None) or identity_config.user_id
             async with self._driver.session(database=self.database) as db_session:
                 res = await db_session.run(
                     "MATCH (e:Entity {owner_id: $uid}) WHERE e.entity_id IN ['assistant_001', 'user_001'] RETURN e.entity_id AS id, COALESCE(e.primary_name, e.name) AS name, COALESCE(e.aliases, []) AS aliases",
-                    uid=identity_config.user_id
+                    uid=uid
                 )
                 data = await res.data()
                 for item in data:
@@ -195,7 +196,7 @@ class KnowledgeBaseEngine:
         # 注入图谱交叉验证分数 (Graph Hop Score)
         for cand in all_candidates:
             if not cand.graph_validated:
-                cand.graph_hop_score = await self._graph_hop_score(cand.speaker, query)
+                cand.graph_hop_score = await self._graph_hop_score(cand.speaker, query, user_id)
         
         # 应用混合评分排序 (获取全量加权结果)
         scored_all = self.scorer.score(all_candidates, top_k=99, query_intent=query_intent)
@@ -203,7 +204,7 @@ class KnowledgeBaseEngine:
         # Inject SQL evidence windows for prompt-adopted items only.
         top_prompt_candidates = [c for i, c in enumerate(scored_all) if i < self.top_k and c.source_msg_id]
         top_msg_ids = [int(c.source_msg_id) for c in top_prompt_candidates if c.source_msg_id]
-        evidence_context_map = await self._build_evidence_context_map(top_msg_ids)
+        evidence_context_map = await self._build_evidence_context_map(top_msg_ids, user_id=user_id)
         for c in top_prompt_candidates:
             if c.source_msg_id:
                 c.evidence_context = evidence_context_map.get(int(c.source_msg_id))
@@ -228,7 +229,7 @@ class KnowledgeBaseEngine:
             for i, c in enumerate(scored_all)
         ]
 
-    async def _graph_hop_score(self, entity_name: str, query_hint: str) -> float:
+    async def _graph_hop_score(self, entity_name: str, query_hint: str, user_id: Optional[str]) -> float:
         """Estimate graph relevance score by checking entity presence."""
         if entity_name in ("[文档]", "AI", "unknown", "", "用户"):
             return 0.5
@@ -237,7 +238,7 @@ class KnowledgeBaseEngine:
                 result = await session.run(
                     "MATCH (e:Entity {owner_id: $uid}) WHERE e.name = $name OR e.name CONTAINS $name "
                     "RETURN count(e) > 0 AS exists",
-                    name=entity_name, uid=identity_config.user_id
+                    name=entity_name, uid=user_id or identity_config.user_id
                 )
                 record = await result.single()
                 return 1.0 if record and record["exists"] else 0.0
@@ -290,8 +291,9 @@ class KnowledgeBaseEngine:
                     """
                     MATCH (root:Entity {owner_id: $uid})
                     WHERE $q_text CONTAINS root.name
-                    MATCH (root)-[:RELATION*0..3]-(sub:Entity)-[:ACTOR_IN]->(evt:Event)
+                    MATCH p=(root)-[:RELATION*0..3]-(sub:Entity {owner_id: $uid})-[:ACTOR_IN]->(evt:Event {owner_id: $uid})
                     WHERE evt.owner_id = $uid AND evt.status = 'active'
+                      AND ALL(rel IN relationships(p) WHERE rel.owner_id = $uid)
                       AND (
                         ($start IS NULL OR $end IS NULL) OR
                         (evt.event_time IS NOT NULL AND evt.event_time >= $start AND evt.event_time <= $end) OR
@@ -346,7 +348,7 @@ class KnowledgeBaseEngine:
                         """
                         MATCH (root:Entity {owner_id: $uid})
                         WHERE $q_text CONTAINS root.name
-                        MATCH (root)-[r:RELATION]-(related:Entity)
+                        MATCH (root)-[r:RELATION]-(related:Entity {owner_id: $uid})
                         WHERE r.owner_id = $uid
                         RETURN root.name AS source, r.type AS rel, related.name AS target, 
                                 COALESCE(properties(r)['inferred'], false) AS inferred, 
@@ -535,7 +537,8 @@ class KnowledgeBaseEngine:
             kb_results = self.v_storer.query(
                 collection_name="knowledge_base",
                 query_texts=[query],
-                n_results=self.top_k
+                n_results=self.top_k,
+                where={"user_id": user_id} if user_id else None
             )
             
             # 合并结果
@@ -845,6 +848,7 @@ class KnowledgeBaseEngine:
     async def _build_evidence_context_map(
         self,
         msg_ids: List[int],
+        user_id: Optional[str] = None,
         prev_rounds: int = 1,
         next_rounds: int = 0,
         max_chars_per_msg: int = 180,
@@ -890,13 +894,22 @@ class KnowledgeBaseEngine:
             async with get_db() as conn:
                 is_sqlite = "sqlite" in str(type(conn)).lower()
                 placeholders = ",".join(["?" if is_sqlite else f"${i+1}" for i in range(len(target_ids))])
-                target_query = f"SELECT id, session_id FROM ef_chat_messages WHERE id IN ({placeholders})"
+                if user_id:
+                    target_query = (
+                        f"SELECT m.id, m.session_id FROM ef_chat_messages m "
+                        f"JOIN ef_chat_sessions s ON s.session_id = m.session_id "
+                        f"WHERE m.id IN ({placeholders}) AND s.user_id = {'?' if is_sqlite else f'${len(target_ids) + 1}'}"
+                    )
+                    target_params = [*target_ids, user_id]
+                else:
+                    target_query = f"SELECT id, session_id FROM ef_chat_messages WHERE id IN ({placeholders})"
+                    target_params = target_ids
 
                 if is_sqlite:
-                    cursor = await conn.execute(target_query, target_ids)
+                    cursor = await conn.execute(target_query, target_params)
                     target_rows = await cursor.fetchall()
                 else:
-                    target_rows = await conn.fetch(target_query, *target_ids)
+                    target_rows = await conn.fetch(target_query, *target_params)
 
                 session_targets: Dict[str, List[int]] = {}
                 for row in target_rows or []:
@@ -909,16 +922,41 @@ class KnowledgeBaseEngine:
                 context_map: Dict[int, str] = {}
                 for sid, mids in session_targets.items():
                     if is_sqlite:
-                        cursor = await conn.execute(
-                            "SELECT id, role, content FROM ef_chat_messages WHERE session_id = ? ORDER BY id ASC",
-                            (sid,),
-                        )
+                        if user_id:
+                            cursor = await conn.execute(
+                                """
+                                SELECT m.id, m.role, m.content
+                                FROM ef_chat_messages m
+                                JOIN ef_chat_sessions s ON s.session_id = m.session_id
+                                WHERE m.session_id = ? AND s.user_id = ?
+                                ORDER BY m.id ASC
+                                """,
+                                (sid, user_id),
+                            )
+                        else:
+                            cursor = await conn.execute(
+                                "SELECT id, role, content FROM ef_chat_messages WHERE session_id = ? ORDER BY id ASC",
+                                (sid,),
+                            )
                         rows = await cursor.fetchall()
                     else:
-                        rows = await conn.fetch(
-                            "SELECT id, role, content FROM ef_chat_messages WHERE session_id = $1 ORDER BY id ASC",
-                            sid,
-                        )
+                        if user_id:
+                            rows = await conn.fetch(
+                                """
+                                SELECT m.id, m.role, m.content
+                                FROM ef_chat_messages m
+                                JOIN ef_chat_sessions s ON s.session_id = m.session_id
+                                WHERE m.session_id = $1 AND s.user_id = $2
+                                ORDER BY m.id ASC
+                                """,
+                                sid,
+                                user_id,
+                            )
+                        else:
+                            rows = await conn.fetch(
+                                "SELECT id, role, content FROM ef_chat_messages WHERE session_id = $1 ORDER BY id ASC",
+                                sid,
+                            )
 
                     messages = [
                         {

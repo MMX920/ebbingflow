@@ -416,7 +416,14 @@
     function dragged(e, d) { d.fx = e.x; d.fy = e.y; }
     function dragended(e, d) { if (!e.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; }
 
-    const ws = new WebSocket("ws://localhost:8000/ws");
+    const pageParams = new URLSearchParams(window.location.search);
+    const userId = (pageParams.get('user_id') || pageParams.get('uid') || pageParams.get('owner_id') || pageParams.get('sandbox_id') || '').trim();
+    const userToken = (pageParams.get('user_token') || pageParams.get('access_token') || '').trim();
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsParams = new URLSearchParams();
+    if (userId) wsParams.set('user_id', userId);
+    if (userToken) wsParams.set('user_token', userToken);
+    const ws = new WebSocket(`${wsProtocol}//${window.location.host}/ws${wsParams.toString() ? `?${wsParams.toString()}` : ''}`);
     let aiBody = null;
 
     ws.onmessage = (e) => {
