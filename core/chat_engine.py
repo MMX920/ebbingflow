@@ -62,6 +62,8 @@ SYSTEM_PROMPT_TEMPLATE = """
 6. 【记忆表达约束】：面向用户叙述记忆时，只能使用“我记得/我记忆中/我这边记录到”这类自然表达；禁止使用“图谱/数据库/向量召回/检索命中/节点/关系”等系统实现术语，除非用户明确要求技术审计细节。
 7. 【证据优先级】：[SQL_EVIDENCE] 与 [GRAPH_CORE] 是事实依据；[EPISODE]/[SAGA] 只是叙事摘要，不能覆盖原文证据。若摘要和证据冲突，必须以 SQL_EVIDENCE/GRAPH_CORE 为准。
 
+{external_system_prompt_block}
+
 [CONTEXT 实时环境区]
 当前时间: {current_time}
 本轮检索倾向: {query_intent}
@@ -477,6 +479,7 @@ class ChatEngine:
         arg2: Any,
         status_callback: Optional[Callable[..., Awaitable[None]]] = None,
         simulated_at: Optional[str] = None,
+        external_system_prompt: Optional[str] = None,
     ) -> AsyncGenerator[str, None]:
         from core.monitoring import token_monitor
         token_monitor.reset_for_new_turn()
@@ -522,6 +525,8 @@ class ChatEngine:
         session.clear_context_canvas()
         session.add_user_message(user_input, timestamp=simulated_at)
         session.context_canvas["latest_user_input"] = user_input
+        if external_system_prompt:
+            session.context_canvas["external_system_prompt"] = str(external_system_prompt).strip()
         if simulated_at:
             session.context_canvas["simulated_at"] = simulated_at
         session.context_canvas["inference_turn_count"] = int(session.context_canvas.get("inference_turn_count", 0)) + 1
@@ -592,6 +597,15 @@ class ChatEngine:
             entity_id=identity_config.assistant_id,
             role_label=role_label
         )
+        external_system_prompt_text = str(session.context_canvas.get("external_system_prompt") or "").strip()
+        external_system_prompt_block = ""
+        if external_system_prompt_text:
+            external_system_prompt_block = (
+                "[EXTERNAL_SYSTEM_PROMPT]\n"
+                "以下内容来自 OpenAI-compatible 调用方的 system/developer message。"
+                "调用方应删除身份、角色、记忆控制类内容，仅保留输出格式、情感标签、语音合成等适配要求。\n"
+                f"{external_system_prompt_text}"
+            )
 
         prompt = SYSTEM_PROMPT_TEMPLATE.format(
             assistant_name=session.context_canvas.get("assistant_real_name", "Andrew"),
@@ -615,6 +629,7 @@ class ChatEngine:
             structured_memory=struc_mem,
             plan_memory=plan_mem,
             narrative_memory=narrative_mem,
+            external_system_prompt_block=external_system_prompt_block,
             current_time=current_time_str,
             query_intent=query_intent
         )

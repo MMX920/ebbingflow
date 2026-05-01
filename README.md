@@ -62,7 +62,7 @@ EbbingFlow 支持用户与助手的身份锚定、别名归一、Big Five 慢变
 
 ## 🚀 快速开始
 
-#### 前置要求
+### 前置要求
 
 | 工具 | 版本要求 | 说明 | 安装检查 |
 |------|---------|------|---------|
@@ -124,6 +124,42 @@ run.bat
 - Interaction Hub: http://localhost:8000
 - Data Monitor: http://localhost:8000/monitor
 
+### 4. OpenAI-compatible API 接入
+
+EbbingFlow 启动后会同时暴露一个本地 OpenAI 兼容接口，可供 Open WebUI、Cherry Studio、小智数字人等前端调用：
+
+```text
+Base URL: http://localhost:8000/v1
+Model: ebbingflow
+API Key: local
+```
+
+如果前端只支持填写完整接口地址，则填写：
+
+```text
+http://localhost:8000/v1/chat/completions
+```
+
+`model` 不传时后端会默认使用 `ebbingflow`；但很多前端会强制要求填写模型名，此时填 `ebbingflow` 即可。本地开源版暂不校验 API Key，若前端必填，可填写任意占位字符串。
+
+请求示例：
+
+```powershell
+curl http://localhost:8000/v1/chat/completions `
+  -H "Content-Type: application/json" `
+  -d '{
+    "model": "ebbingflow",
+    "messages": [
+      {"role": "system", "content": "请在回复开头输出 <happy>/<thinking> 情绪标签。"},
+      {"role": "user", "content": "我今天完成了一个重要功能。"}
+    ]
+  }'
+```
+
+外部 `system` / `developer` message 会注入 EbbingFlow 主 prompt 的 `[EXTERNAL_SYSTEM_PROMPT]` 区块。接入其它前端时，请删除其中的身份、角色、记忆控制类内容，只保留情绪标签、输出格式、语音合成、回复长度等适配要求。
+
+更多细节见 [OpenAI-compatible Chat API](./docs/api-openai-compatible.md)。
+
 **QQ 机器人集成示例 (可选)**
 
 EbbingFlow 支持通过 QQ 机器人进行跨平台交互，让你可以直接在移动端进行长效记忆沉淀：
@@ -136,7 +172,7 @@ EbbingFlow 支持通过 QQ 机器人进行跨平台交互，让你可以直接�
    ```
 现在，你就可以直接在 QQ 聊天框中与 EbbingFlow 交流互动。
 
-### 4. 导入演示数据 (可选)
+### 5. 导入演示数据 (可选)
 
 如果你希望快速预览系统的核心能力，可以导入我们预置的演示数据：**《重生成为诸葛亮，系统（Ebbingflow）助我成就霸业》**。
 

@@ -61,7 +61,7 @@ EbbingFlow supports identity anchoring, alias normalization, and profiling based
 
 ## 🚀 Quick Start
 
-#### Prerequisites
+### Prerequisites
 
 | Tool | Version Requirement | Description | Installation Check |
 |------|---------|------|---------|
@@ -122,6 +122,42 @@ run.bat
 - Interaction Hub: http://localhost:8000
 - Data Monitor: http://localhost:8000/monitor
 
+### 4. OpenAI-Compatible API
+
+After startup, EbbingFlow also exposes a local OpenAI-compatible endpoint for Open WebUI, Cherry Studio, Xiaozhi-style digital humans, and other frontends:
+
+```text
+Base URL: http://localhost:8000/v1
+Model: ebbingflow
+API Key: local
+```
+
+If a frontend only accepts a full endpoint URL, use:
+
+```text
+http://localhost:8000/v1/chat/completions
+```
+
+The backend defaults `model` to `ebbingflow` when it is omitted. Many frontends still require a model name, so enter `ebbingflow` when needed. The local open-source edition does not validate API keys yet; if a frontend requires one, use any placeholder string.
+
+Example:
+
+```powershell
+curl http://localhost:8000/v1/chat/completions `
+  -H "Content-Type: application/json" `
+  -d '{
+    "model": "ebbingflow",
+    "messages": [
+      {"role": "system", "content": "Prefix replies with emotion tags such as <happy> or <thinking>."},
+      {"role": "user", "content": "I finished an important feature today."}
+    ]
+  }'
+```
+
+External `system` / `developer` messages are injected into EbbingFlow's main prompt as an `[EXTERNAL_SYSTEM_PROMPT]` block. When connecting another frontend, remove identity, character, and memory-control instructions from its system prompt. Keep only output-format requirements such as emotion tags, speech synthesis constraints, response length, or JSON shape.
+
+See [OpenAI-compatible Chat API](./docs/api-openai-compatible.md) for details.
+
 **QQ Bot Integration (Optional)**
 
 EbbingFlow supports interaction via QQ Bot, allowing for seamless long-term memory synchronization across devices:
@@ -134,7 +170,7 @@ EbbingFlow supports interaction via QQ Bot, allowing for seamless long-term memo
    ```
 You can now chat with EbbingFlow directly in QQ.
 
-### 4. Experience with Demo Data (Optional)
+### 5. Experience with Demo Data (Optional)
 
 If you want to quickly preview the system's capabilities, you can import our pre-configured demo: **"Reborn as Zhuge Liang: Building an Empire with EbbingFlow"**.
 

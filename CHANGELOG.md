@@ -8,12 +8,14 @@ All notable changes to the EbbingFlow project will be documented in this file st
 - **Narrative prompt lane**: Episode/Saga candidates are injected into a separate `[NARRATIVE]` context area and only when accepted by the scorer.
 - **SOP response-phase audit tests**: Added regression coverage for response-phase audit errors and writer-internal failure handling.
 - **User data isolation**: Added per-user data isolation across chat history, vector memory, Neo4j graph data, and demo access tokens.
+- **OpenAI-compatible chat API**: Added `/v1/chat/completions` and `/api/chat/completions` for local external frontends, with non-streaming and SSE streaming responses.
 
 ### Changed
 - **Evidence-first retrieval**: Fact-style questions now prioritize SQL/Graph/Structured Evidence and strictly exclude zero-budget narrative fallbacks.
 - **Token attribution**: Data Monitor now attributes post-response token usage across steps 08-12 instead of letting large memory costs fall through to audit settlement.
 - **Middleware audit plumbing**: Response-phase audit callbacks are now attached to `ChatSession`, keeping middleware signatures clean.
 - **Embedding monitoring**: Vector query embedding usage is now recorded after successful retrieval and validates collection names explicitly.
+- **Startup safety**: EbbingFlow now stops startup when core memory storage cannot initialize, preventing chat sessions from running without persistent memory.
 
 ### Fixed
 - Fixed duplicated `inference_turn_count` increments between chat engine and API scheduling.

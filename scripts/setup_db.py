@@ -18,7 +18,7 @@ async def setup_db():
     schema_path = os.path.join("memory", "sql", "schema", "ef_history.sql")
     if not os.path.exists(schema_path):
         print(f"[DB Setup] Schema file not found: {schema_path}")
-        return
+        return False
 
     with open(schema_path, "r", encoding="utf-8") as f:
         sql = f.read()
@@ -52,8 +52,10 @@ async def setup_db():
                 await conn.execute(sql)
                 
             print("[DB Setup] Core tables initialized successfully.")
+            return True
     except Exception as e:
         print(f"[DB Setup] Error during schema execution: {e}")
+        return False
     finally:
         await close_pool()
 

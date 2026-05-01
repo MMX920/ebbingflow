@@ -102,7 +102,9 @@ class PostgresConfig:
 
     @classmethod
     def is_configured(cls) -> bool:
-        return bool(cls.host and cls.password)
+        placeholder_passwords = {"your_password", "password", "changeme", "change-me"}
+        password = str(cls.password or "").strip()
+        return bool(cls.host and password and password.lower() not in placeholder_passwords)
 
 postgres_config = PostgresConfig()
 

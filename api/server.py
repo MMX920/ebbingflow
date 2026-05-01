@@ -12,7 +12,8 @@ import re
 import hmac
 import hashlib
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
+from pydantic import BaseModel, ConfigDict
 import uvicorn
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
@@ -713,13 +714,21 @@ async def lifespan(app: FastAPI):
     engine = get_standard_engine()
     backend = identity_config.chat_history_backend
     if backend == "sql":
-        try:
-            from scripts.setup_db import setup_db
-            await setup_db()
-            from scripts.initialize_neo4j import initialize_neo4j
-            await initialize_neo4j()
-        except Exception as e:
-            print(f"[Bootstrap] Auto DB Setup failed (continuing anyway): {e}")
+        from scripts.setup_db import setup_db
+        sql_ready = await setup_db()
+        if not sql_ready:
+            raise RuntimeError(
+                "[Bootstrap] SQL 主存初始化失败，EbbingFlow 已停止启动。"
+                "请检查 SQLite/PostgreSQL 配置后重新运行。"
+            )
+
+        from scripts.initialize_neo4j import initialize_neo4j
+        neo4j_ready = await initialize_neo4j()
+        if not neo4j_ready:
+            raise RuntimeError(
+                "[Bootstrap] Neo4j 图数据库未就绪，EbbingFlow 已停止启动。"
+                "请先启动 Neo4j 并确认 Bolt 端口可访问后重新运行。"
+            )
 
         from memory.history.repository import SqlHistoryRepository
         history_repo = SqlHistoryRepository()
@@ -738,6 +747,7 @@ async def lifespan(app: FastAPI):
         neo4j_config.uri, 
         auth=(neo4j_config.username, neo4j_config.password)
     )
+    await global_db_driver.verify_connectivity()
     
     global checkpoint_manager
     checkpoint_manager = CDCCheckpointManager()
@@ -783,7 +793,10 @@ async def lifespan(app: FastAPI):
         print(f"[Stats] Total Chat Records in RAG: {v_storer.get_chat_count()}")
     except Exception as e:
         logger.exception("[VECTOR_BOOTSTRAP_FAILED] Vector storer self-check failed: %s", e)
-        session.context_canvas["vector_status"] = "degraded"
+        raise RuntimeError(
+            "[Bootstrap] 向量数据库初始化失败，EbbingFlow 已停止启动。"
+            "请检查 Chroma/Embedding 配置后重新运行。"
+        ) from e
         
     print(f"[Session] Restored {len(session.history)} messages for {session.user_id}")
     print("EbbingFlow Standard Engine Initialized (Global Driver Active)")
@@ -826,6 +839,204 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 active_connections: set[WebSocket] = set()
+
+
+class OpenAIChatMessage(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    role: str
+    content: str | list | dict | None = None
+    name: str | None = None
+
+
+class OpenAIChatCompletionRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    model: str = "ebbingflow"
+    messages: list[OpenAIChatMessage]
+    stream: bool = False
+    user: str | None = None
+    user_id: str | None = None
+    user_token: str | None = None
+    metadata: dict | None = None
+
+
+def _message_content_to_text(content) -> str:
+    """Extract plain text from OpenAI-style message content."""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, dict):
+        if content.get("type") == "text":
+            return str(content.get("text") or "")
+        return str(content.get("text") or content.get("content") or "")
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            text = _message_content_to_text(item)
+            if text:
+                parts.append(text)
+        return "\n".join(parts)
+    return str(content)
+
+
+def _extract_openai_user_input(messages: list[OpenAIChatMessage]) -> str:
+    """
+    For OpenAI-compatible integrations, treat the latest user message as the
+    current turn and intentionally ignore external system/assistant context.
+    EbbingFlow owns persona, memory, and long-term context assembly.
+    """
+    for message in reversed(messages or []):
+        if str(message.role or "").lower() == "user":
+            text = _message_content_to_text(message.content).strip()
+            if text:
+                return text
+    raise HTTPException(status_code=400, detail="messages must contain a non-empty user message")
+
+
+def _extract_openai_external_system_prompt(messages: list[OpenAIChatMessage]) -> str:
+    """Join external system/developer messages for prompt-level adapter hints."""
+    parts = []
+    for message in messages or []:
+        role = str(message.role or "").lower()
+        if role not in {"system", "developer"}:
+            continue
+        text = _message_content_to_text(message.content).strip()
+        if text:
+            parts.append(text)
+    return "\n\n".join(parts)
+
+
+def _resolve_openai_api_user(req: OpenAIChatCompletionRequest, request: Request) -> str:
+    metadata = req.metadata or {}
+    requested_user_id = req.user_id or metadata.get("user_id") or req.user or identity_config.user_id
+    uid = _sanitize_user_id(requested_user_id)
+    token = req.user_token or metadata.get("user_token")
+    if uid == identity_config.user_id and _is_loopback_request(request):
+        return uid
+    if uid != identity_config.user_id:
+        return _require_user_access(uid, token, request=request)
+    if token:
+        return _require_user_access(uid, token, request=request)
+    return uid
+
+
+def _openai_usage_payload():
+    try:
+        from core.monitoring import token_monitor
+
+        stats = token_monitor.get_report_data()
+        prompt_tokens = int(
+            (stats.get("chat", {}).get("input", 0) or 0)
+            + (stats.get("memory", {}).get("input", 0) or 0)
+            + (stats.get("embedding", {}).get("input", 0) or 0)
+        )
+        completion_tokens = int(
+            (stats.get("chat", {}).get("output", 0) or 0)
+            + (stats.get("memory", {}).get("output", 0) or 0)
+            + (stats.get("embedding", {}).get("output", 0) or 0)
+        )
+        return {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+        }
+    except Exception:
+        return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
+
+async def _chat_completion_chunks(req: OpenAIChatCompletionRequest, request: Request):
+    global engine
+    if engine is None:
+        engine = get_standard_engine()
+
+    uid = _resolve_openai_api_user(req, request)
+    chat_session = await _get_user_session(uid)
+    user_input = _extract_openai_user_input(req.messages)
+    external_system_prompt = _extract_openai_external_system_prompt(req.messages)
+    completion_id = "chatcmpl-" + secrets.token_urlsafe(18).replace("-", "").replace("_", "")
+    created = int(time.time())
+
+    async def _status_callback(step, status, **kwargs):
+        return None
+
+    yield {
+        "id": completion_id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": req.model,
+        "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
+    }
+
+    async for chunk in engine.chat_stream(
+        user_input,
+        chat_session,
+        status_callback=_status_callback,
+        external_system_prompt=external_system_prompt,
+    ):
+        if not chunk:
+            continue
+        yield {
+            "id": completion_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": req.model,
+            "choices": [{"index": 0, "delta": {"content": chunk}, "finish_reason": None}],
+        }
+
+    yield {
+        "id": completion_id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": req.model,
+        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        "usage": _openai_usage_payload(),
+    }
+
+
+async def _handle_openai_chat_completion(req: OpenAIChatCompletionRequest, request: Request):
+    if not req.stream:
+        completion_id = "chatcmpl-" + secrets.token_urlsafe(18).replace("-", "").replace("_", "")
+        created = int(time.time())
+        content_parts = []
+        async for payload in _chat_completion_chunks(req, request):
+            choice = (payload.get("choices") or [{}])[0]
+            delta = choice.get("delta") or {}
+            if "content" in delta:
+                content_parts.append(delta["content"])
+        content = "".join(content_parts)
+        return {
+            "id": completion_id,
+            "object": "chat.completion",
+            "created": created,
+            "model": req.model,
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": content},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": _openai_usage_payload(),
+        }
+
+    async def event_stream():
+        async for payload in _chat_completion_chunks(req, request):
+            yield "data: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@app.post("/v1/chat/completions")
+async def openai_chat_completions(req: OpenAIChatCompletionRequest, request: Request):
+    return await _handle_openai_chat_completion(req, request)
+
+
+@app.post("/api/chat/completions")
+async def api_chat_completions(req: OpenAIChatCompletionRequest, request: Request):
+    return await _handle_openai_chat_completion(req, request)
 
 def _is_ws_disconnect_error(exc: Exception) -> bool:
     """Return True for expected websocket disconnect-style errors."""
@@ -1992,7 +2203,6 @@ async def rollback_evolution(event_id: str, request: Request, user_id: str = Non
             await tx.rollback()
             return {"status": "error", "message": str(e)}
 
-from pydantic import BaseModel
 class WipeRequest(BaseModel):
     # Default to cognitive-only wipe to avoid accidental KB deletion
     items: list[str] = ["cognitive"]
