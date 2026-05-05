@@ -209,6 +209,133 @@ class EventRepository:
             logger.error("[EventRepo] Aggregate failed: %s", exc)
             return []
 
+    async def aggregate_quantities(
+        self,
+        owner_id: str,
+        main_type: Optional[MainEventType] = None,
+        time_start: Optional[datetime] = None,
+        time_end: Optional[datetime] = None,
+    ) -> List[Dict[str, Any]]:
+        """Group quantitative events by (subject, object, quantity_unit).
+
+        Resource consumption/loss style rows are interpreted as negative
+        deltas; everything else is positive. `raw_total_quantity` keeps the
+        unsigned sum for audit/debug display.
+        """
+        params: List[Any] = []
+        try:
+            async with get_db() as conn:
+                is_pg = hasattr(conn, "fetch")
+                idx = 1
+
+                def next_p():
+                    nonlocal idx
+                    p = f"${idx}" if is_pg else "?"
+                    idx += 1
+                    return p
+
+                where = [f"owner_id = {next_p()}", "quantity IS NOT NULL", "quantity_unit IS NOT NULL"]
+                params.append(owner_id)
+                if main_type:
+                    where.append(f"main_type = {next_p()}")
+                    params.append(main_type.value)
+                if time_start:
+                    where.append(f"event_time >= {next_p()}")
+                    params.append(time_start)
+                if time_end:
+                    where.append(f"event_time <= {next_p()}")
+                    params.append(time_end)
+
+                sign_expr = """
+                    CASE
+                      WHEN LOWER(COALESCE(subtype, '')) LIKE '%expenditure%'
+                        OR LOWER(COALESCE(subtype, '')) LIKE '%loss%'
+                        OR LOWER(COALESCE(subtype, '')) LIKE '%consume%'
+                        OR LOWER(COALESCE(subtype, '')) LIKE '%consumption%'
+                        OR LOWER(COALESCE(subtype, '')) LIKE '%out'
+                        OR LOWER(COALESCE(subtype, '')) LIKE '%_out'
+                        OR LOWER(COALESCE(predicate, '')) LIKE '%consume%'
+                        OR LOWER(COALESCE(predicate, '')) LIKE '%loss%'
+                        OR COALESCE(predicate, '') LIKE '%消耗%'
+                        OR COALESCE(predicate, '') LIKE '%损耗%'
+                        OR COALESCE(predicate, '') LIKE '%损失%'
+                        OR COALESCE(predicate, '') LIKE '%用掉%'
+                        OR COALESCE(predicate, '') LIKE '%出库%'
+                        OR COALESCE(predicate, '') LIKE '%折损%'
+                      THEN -ABS(quantity)
+                      ELSE quantity
+                    END
+                """
+
+                sql = f"""
+                SELECT
+                    COALESCE(subject, '') AS subject,
+                    COALESCE(object,  '') AS object,
+                    '' AS subtype,
+                    quantity_unit,
+                    SUM({sign_expr}) AS total_quantity,
+                    SUM(quantity) AS raw_total_quantity,
+                    COUNT(*)      AS count
+                FROM ef_memory_events
+                WHERE {" AND ".join(where)}
+                GROUP BY subject, object, quantity_unit
+                ORDER BY total_quantity DESC
+                """
+
+                if is_pg:
+                    rows = await conn.fetch(sql, *params)
+                else:
+                    cur = await conn.execute(sql, params)
+                    rows = await cur.fetchall()
+                return [dict(row) for row in rows]
+        except Exception as exc:
+            logger.error("[EventRepo] aggregate_quantities failed: %s", exc)
+            return []
+
+    async def list_quantitative_events(
+        self,
+        owner_id: str,
+        time_start: Optional[datetime] = None,
+        time_end: Optional[datetime] = None,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        """Return events with a non-null quantity, regardless of main_type."""
+        params: List[Any] = []
+        try:
+            async with get_db() as conn:
+                is_pg = hasattr(conn, "fetch")
+                idx = 1
+
+                def next_p():
+                    nonlocal idx
+                    p = f"${idx}" if is_pg else "?"
+                    idx += 1
+                    return p
+
+                where = [f"owner_id = {next_p()}", "quantity IS NOT NULL"]
+                params.append(owner_id)
+                if time_start:
+                    where.append(f"event_time >= {next_p()}")
+                    params.append(time_start)
+                if time_end:
+                    where.append(f"event_time <= {next_p()}")
+                    params.append(time_end)
+
+                sql = (
+                    "SELECT * FROM ef_memory_events WHERE "
+                    + " AND ".join(where)
+                    + f" ORDER BY event_time DESC, created_at DESC LIMIT {int(limit)}"
+                )
+                if is_pg:
+                    rows = await conn.fetch(sql, *params)
+                else:
+                    cur = await conn.execute(sql, params)
+                    rows = await cur.fetchall()
+                return [dict(row) for row in rows]
+        except Exception as exc:
+            logger.error("[EventRepo] list_quantitative_events failed: %s", exc)
+            return []
+
     async def link_evidence(self, event_uuid: str, message_id: int):
         """Link an event to its source evidence message."""
         try:

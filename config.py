@@ -88,13 +88,13 @@ class ServerConfig:
 server_config = ServerConfig()
 
 class PostgresConfig:
-    """共享 PostgreSQL 配置 — 处理跨系统结构化业务数据同步"""
+    """Optional PostgreSQL backend for chat history (alternative to SQLite)."""
+    enabled: bool = os.getenv("POSTGRES_ENABLED", "").lower() == "true"
     host: str = os.getenv("POSTGRES_HOST", "")
     port: int = int(os.getenv("POSTGRES_PORT", "5432"))
     db: str = os.getenv("POSTGRES_DB", "ebbingflow_db")
     user: str = os.getenv("POSTGRES_USER", "ebbingflow_admin")
     password: str = os.getenv("POSTGRES_PASSWORD", "")
-    tenant_id: str = os.getenv("TENANT_ID", "")  # 查询时使用的租户 ID
 
     @classmethod
     def connection_string(cls) -> str:
@@ -102,9 +102,21 @@ class PostgresConfig:
 
     @classmethod
     def is_configured(cls) -> bool:
-        placeholder_passwords = {"your_password", "password", "changeme", "change-me"}
+        placeholder_passwords = {
+            "your_password",
+            "your_strong_db_password",
+            "password",
+            "changeme",
+            "change-me",
+            "change-this-password",
+            "change-this-postgres-password",
+        }
         password = str(cls.password or "").strip()
         return bool(cls.host and password and password.lower() not in placeholder_passwords)
+
+    @classmethod
+    def is_requested(cls) -> bool:
+        return bool(cls.enabled or cls.host)
 
 postgres_config = PostgresConfig()
 
@@ -126,10 +138,6 @@ class IdentityConfig:
         self.assistant_aliases = os.getenv("ASSISTANT_ALIASES", "无")
         self.assistant_role = os.getenv("ASSISTANT_ROLE", "全能管家")
         self.assistant_profile = os.getenv("ASSISTANT_PROFILE", self.default_asst_persona)
-        # --- CRM Sync (Phase-2.5) ---
-        self.enable_crm_sync = os.getenv("ENABLE_CRM_SYNC", "false").lower() == "true"
-        self.crm_source_weight = float(os.getenv("CRM_SOURCE_WEIGHT", "0.65"))
-
         # --- SQL History & Evidence Chain (Phase-M1) ---
         self.chat_history_backend = os.getenv("CHAT_HISTORY_BACKEND", "sql").lower()
         self.evidence_injection_enabled = os.getenv("EVIDENCE_INJECTION_ENABLED", "true").lower() == "true"

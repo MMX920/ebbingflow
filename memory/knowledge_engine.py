@@ -9,6 +9,8 @@
 """
 import logging
 import json
+import calendar
+import re
 from typing import Dict, List, Optional
 from datetime import datetime, timedelta, timezone
 
@@ -20,7 +22,7 @@ try:
 except ImportError:
     BM25Okapi = None
 
-from config import neo4j_config, embed_config, memory_config, identity_config, postgres_config
+from config import neo4j_config, embed_config, memory_config, identity_config
 from .scoring import HybridScorer, ScoredCandidate, UnifiedMemoryResult
 
 logger = logging.getLogger(__name__)
@@ -133,14 +135,18 @@ class KnowledgeBaseEngine:
         start_g = time.perf_counter()
         
         tw_start, tw_end, source = self._infer_time_window(query)
+        narrative_day = self._infer_narrative_day(query)
         self.last_latency["time_window"] = {
             "enabled": tw_start is not None,
             "start": tw_start,
             "end": tw_end,
-            "source": source
+            "source": source,
+            "narrative_day": narrative_day,
         }
-        
-        graph_candidates = await self._retrieve_graph_events(query, user_id, tw_start, tw_end)
+
+        graph_candidates = await self._retrieve_graph_events(
+            query, user_id, tw_start, tw_end, narrative_day=narrative_day
+        )
         self.last_latency["graph"] = int((time.perf_counter() - start_g) * 1000)
         
         # 3. BM25 文本关键词召回 (支持开关控制)
@@ -150,12 +156,9 @@ class KnowledgeBaseEngine:
             bm25_candidates = await self._retrieve_bm25_context(query, user_id)
         self.last_latency["bm25"] = int((time.perf_counter() - start_b) * 1000)
 
-        # 4. SQL CRM 结构化数据召回 (仅当配置了 PostgreSQL 且为 CRM 类查询时触发)
-        start_s = time.perf_counter()
-        sql_candidates = []
-        if postgres_config.is_configured() and postgres_config.tenant_id:
-            sql_candidates = await self._retrieve_sql_crm_context(query)
-        self.last_latency["sql"] = int((time.perf_counter() - start_s) * 1000)
+        start_sql = time.perf_counter()
+        sql_candidates = await self._retrieve_sql_keyword_context(query, user_id)
+        self.last_latency["sql_keyword"] = int((time.perf_counter() - start_sql) * 1000)
 
         # 5. Episode 剧情召回 (M2.3)
         start_e = time.perf_counter()
@@ -177,7 +180,16 @@ class KnowledgeBaseEngine:
         plan_candidates = await self._retrieve_plan_items(query, user_id=user_id, time_start=tw_start, time_end=tw_end)
         self.last_latency["plans"] = int((time.perf_counter() - start_plan) * 1000)
 
-        raw_candidates = vector_candidates + graph_candidates + bm25_candidates + sql_candidates + episode_candidates + saga_candidates + struc_candidates + plan_candidates
+        raw_candidates = (
+            vector_candidates
+            + graph_candidates
+            + bm25_candidates
+            + sql_candidates
+            + episode_candidates
+            + saga_candidates
+            + struc_candidates
+            + plan_candidates
+        )
         all_candidates = []
         seen_keys = set()
         for cand in raw_candidates:
@@ -200,6 +212,7 @@ class KnowledgeBaseEngine:
         
         # 应用混合评分排序 (获取全量加权结果)
         scored_all = self.scorer.score(all_candidates, top_k=99, query_intent=query_intent)
+        scored_all = self._promote_fact_evidence(scored_all, query_intent)
 
         # Inject SQL evidence windows for prompt-adopted items only.
         top_prompt_candidates = [c for i, c in enumerate(scored_all) if i < self.top_k and c.source_msg_id]
@@ -246,42 +259,179 @@ class KnowledgeBaseEngine:
             logger.debug("[KnowledgeBaseEngine] graph_hop_score failed for '%s': %s", entity_name, exc)
             return 0.0
 
+    def _promote_fact_evidence(self, candidates: List[ScoredCandidate], query_intent: str) -> List[ScoredCandidate]:
+        """Ensure fact questions carry at least one raw SQL evidence hit."""
+        if query_intent != "fact" or not candidates:
+            return candidates
+
+        prompt_limit = max(1, self.top_k)
+        head = list(candidates[:prompt_limit])
+        tail = list(candidates[prompt_limit:])
+        if any(c.source_type == "sql" and c.source_msg_id for c in head):
+            return candidates
+
+        evidence = next((c for c in tail if c.source_type == "sql" and c.source_msg_id), None)
+        if not evidence:
+            return candidates
+
+        tail.remove(evidence)
+        replace_idx = len(head) - 1
+        for idx in range(len(head) - 1, -1, -1):
+            if head[idx].source_type in {"episode", "saga", "vector"}:
+                replace_idx = idx
+                break
+
+        displaced = head[replace_idx]
+        head[replace_idx] = evidence
+        return head + [displaced] + tail
+
+    async def _graph_hop_score(self, entity_name: str, query_hint: str, user_id: Optional[str]) -> float:
+        """Estimate graph relevance score by checking entity presence."""
+        if entity_name in ("[文档]", "AI", "unknown", "", "用户"):
+            return 0.5
+        try:
+            async with self._driver.session(database=self.database) as session:
+                result = await session.run(
+                    "MATCH (e:Entity {owner_id: $uid}) WHERE e.name = $name OR e.name CONTAINS $name "
+                    "RETURN count(e) > 0 AS exists",
+                    name=entity_name, uid=user_id or identity_config.user_id
+                )
+                record = await result.single()
+                return 1.0 if record and record["exists"] else 0.0
+        except Exception as exc:
+            logger.debug("[KnowledgeBaseEngine] graph_hop_score failed for '%s': %s", entity_name, exc)
+            return 0.0
+
+    def _infer_narrative_day(self, query: str) -> Optional[int]:
+        """Parse RP-style narrative day numbering (e.g. '第 61 天', 'day 23').
+
+        Returns the integer day index when the query mentions one, else None.
+        This is a separate axis from wall-clock time windows — narrative day
+        only makes sense when events were tagged with metadata.narrative_day
+        at extraction time.
+        """
+        if not query:
+            return None
+        import re
+        # Chinese: 第61天 / 第 61 天 / 第 6 1 天 (allow whitespace)
+        m = re.search(r"第\s*([0-9]{1,4})\s*天", query)
+        if m:
+            try:
+                return int(m.group(1))
+            except ValueError:
+                pass
+        # English: day 12 / day-12 / day#12 (word-boundary)
+        m = re.search(r"\bday[\s\-#:]*([0-9]{1,4})\b", query, flags=re.IGNORECASE)
+        if m:
+            try:
+                return int(m.group(1))
+            except ValueError:
+                pass
+        return None
+
     def _infer_time_window(self, query: str) -> tuple[Optional[str], Optional[str], str]:
         """Infer a coarse time window from natural-language query text."""
         now = datetime.now(timezone.utc)
-        q = query.lower()
-        
+        q = str(query or "").lower()
+
+        def _day_window(day):
+            iso = day.isoformat()
+            return f"{iso}T00:00:00Z", f"{iso}T23:59:59Z", "nlp_inferred"
+
+        def _range_window(start_day, end_day):
+            return (
+                f"{start_day.isoformat()}T00:00:00Z",
+                f"{end_day.isoformat()}T23:59:59Z",
+                "nlp_inferred",
+            )
+
         if "今天" in q or "今日" in q or "刚刚" in q:
-            day = now.date().isoformat()
-            return f"{day}T00:00:00Z", f"{day}T23:59:59Z", "nlp_inferred"
+            return _day_window(now.date())
         
         if "昨天" in q or "昨日" in q:
-            day = (now - timedelta(days=1)).date().isoformat()
-            return f"{day}T00:00:00Z", f"{day}T23:59:59Z", "nlp_inferred"
+            return _day_window((now - timedelta(days=1)).date())
             
         if "前天" in q:
-            day = (now - timedelta(days=2)).date().isoformat()
-            return f"{day}T00:00:00Z", f"{day}T23:59:59Z", "nlp_inferred"
+            return _day_window((now - timedelta(days=2)).date())
             
         if "明天" in q:
-            day = (now + timedelta(days=1)).date().isoformat()
-            return f"{day}T00:00:00Z", f"{day}T23:59:59Z", "nlp_inferred"
+            return _day_window((now + timedelta(days=1)).date())
             
         if "本周" in q:
-            start = (now - timedelta(days=now.weekday())).date().isoformat()
-            end = (now + timedelta(days=6-now.weekday())).date().isoformat()
-            return f"{start}T00:00:00Z", f"{end}T23:59:59Z", "nlp_inferred"
+            start = (now - timedelta(days=now.weekday())).date()
+            end = (now + timedelta(days=6-now.weekday())).date()
+            return _range_window(start, end)
 
         if "上周" in q:
-            start = (now - timedelta(days=now.weekday()+7)).date().isoformat()
-            end = (now - timedelta(days=now.weekday()+1)).date().isoformat()
-            return f"{start}T00:00:00Z", f"{end}T23:59:59Z", "nlp_inferred"
+            start = (now - timedelta(days=now.weekday()+7)).date()
+            end = (now - timedelta(days=now.weekday()+1)).date()
+            return _range_window(start, end)
+
+        m = re.search(r"(?:过去|最近|前)\s*([0-9]{1,3})\s*天", q)
+        if m:
+            days = max(1, min(90, int(m.group(1))))
+            return _range_window((now - timedelta(days=days)).date(), now.date())
+
+        if any(marker in q for marker in ("前几天", "这几天", "最近几天", "过去几天")):
+            return _range_window((now - timedelta(days=3)).date(), now.date())
+
+        m = re.search(r"(?:(20[0-9]{2})\s*年\s*)?([0-9]{1,2})\s*月\s*([0-9]{1,2})\s*(?:日|号)?", q)
+        if m:
+            year = int(m.group(1) or now.year)
+            month = int(m.group(2))
+            day_num = int(m.group(3))
+            try:
+                target = datetime(year, month, day_num, tzinfo=timezone.utc).date()
+            except ValueError:
+                return None, None, "none"
+            if any(marker in q for marker in ("那几天", "那几日", "前后几天", "附近几天")):
+                last_day = calendar.monthrange(year, month)[1]
+                start = target.replace(day=max(1, day_num - 2))
+                end = target.replace(day=min(last_day, day_num + 2))
+                return _range_window(start, end)
+            return _day_window(target)
+
+        m = re.search(r"(?:(20[0-9]{2})\s*年\s*)?([0-9]{1,2})\s*月\s*(上旬|中旬|下旬|月初|月底|月末)", q)
+        if m:
+            year = int(m.group(1) or now.year)
+            month = int(m.group(2))
+            try:
+                last_day = calendar.monthrange(year, month)[1]
+            except calendar.IllegalMonthError:
+                return None, None, "none"
+            phrase = m.group(3)
+            if phrase in {"上旬", "月初"}:
+                start_day, end_day = 1, 10
+            elif phrase == "中旬":
+                start_day, end_day = 11, 20
+            else:
+                start_day, end_day = 21, last_day
+            start = datetime(year, month, start_day, tzinfo=timezone.utc).date()
+            end = datetime(year, month, min(end_day, last_day), tzinfo=timezone.utc).date()
+            return _range_window(start, end)
 
         return None, None, "none"
 
-    async def _retrieve_graph_events(self, query: str, user_id: str, time_window_start: str = None, time_window_end: str = None) -> List[ScoredCandidate]:
+    async def _retrieve_graph_events(
+        self,
+        query: str,
+        user_id: str,
+        time_window_start: str = None,
+        time_window_end: str = None,
+        narrative_day: Optional[int] = None,
+    ) -> List[ScoredCandidate]:
         """
-        增强型图谱检索：支持 3 跳内关联实体的推理
+        增强型图谱检索：支持 3 跳内关联实体的推理。
+
+        Filter precedence:
+          1) keyword pass — query text contains an Entity name (3-hop expand)
+          2) narrative_day pass — RP-style 第 N 天 / day N filter
+          3) time-window pass — only when wall-clock window provided
+        We deliberately do NOT fall back to "global highest-impact events"
+        when none of the above filter, because that path floods the prompt
+        with semantically-unrelated origin/genesis nodes that mislead the
+        LLM (the answer comes back confidently wrong with creation-day
+        events injected as Day-N evidence).
         """
         candidates = []
         try:
@@ -299,7 +449,8 @@ class KnowledgeBaseEngine:
                         (evt.event_time IS NOT NULL AND evt.event_time >= $start AND evt.event_time <= $end) OR
                         (evt.event_time IS NULL AND (evt.record_time >= $start OR evt.created_at >= $start) AND (evt.record_time <= $end OR evt.created_at <= $end))
                       )
-                    RETURN 
+                      AND ($narrative_day IS NULL OR evt.narrative_day = $narrative_day)
+                    RETURN
                         sub.name AS subject,
                         evt.predicate AS predicate,
                         evt.context AS context,
@@ -314,18 +465,42 @@ class KnowledgeBaseEngine:
                     LIMIT $limit
                     """,
                     q_text=query, limit=self.top_k, uid=user_id,
-                    start=time_window_start, end=time_window_end
+                    start=time_window_start, end=time_window_end,
+                    narrative_day=narrative_day,
                 )
                 records = await result.data()
-                
-                # 兜底：如果关键词没有命中，取全局高影响事件
-                if not records:
+
+                # narrative_day fallback: pull all events for that exact day,
+                # even when the query mentions no entity by name.
+                if not records and narrative_day is not None:
                     result = await session.run(
                         """
-                        MATCH (sub:Entity {owner_id: $uid})-[:ACTOR_IN]->(evt:Event) 
+                        MATCH (sub:Entity {owner_id: $uid})-[:ACTOR_IN]->(evt:Event)
+                        WHERE evt.owner_id = $uid AND evt.status = 'active'
+                          AND evt.narrative_day = $narrative_day
+                        RETURN sub.name AS subject, evt.predicate AS predicate, evt.context AS context,
+                                evt.timestamp_reference AS time_ref, evt.created_at AS created_at,
+                                evt.event_time AS event_time, evt.record_time AS record_time,
+                                COALESCE(evt.impact_score, 5) AS impact_score,
+                                COALESCE(evt.confidence, 1.0) AS confidence,
+                                evt.uuid AS event_uuid
+                        ORDER BY evt.created_at ASC
+                        LIMIT $limit
+                        """,
+                        limit=self.top_k, uid=user_id, narrative_day=narrative_day,
+                    )
+                    records = await result.data()
+
+                # Wall-clock-window fallback: only run when an explicit time
+                # window was provided. Without ANY filter, returning global
+                # highest-impact events pollutes the prompt — better to be
+                # silent than misleading.
+                if not records and time_window_start and time_window_end:
+                    result = await session.run(
+                        """
+                        MATCH (sub:Entity {owner_id: $uid})-[:ACTOR_IN]->(evt:Event)
                         WHERE evt.owner_id = $uid AND evt.status = 'active'
                           AND (
-                            ($start IS NULL OR $end IS NULL) OR
                             (evt.event_time IS NOT NULL AND evt.event_time >= $start AND evt.event_time <= $end) OR
                             (evt.event_time IS NULL AND (evt.record_time >= $start OR evt.created_at >= $start) AND (evt.record_time <= $end OR evt.created_at <= $end))
                           )
@@ -338,7 +513,7 @@ class KnowledgeBaseEngine:
                         ORDER BY evt.impact_score DESC LIMIT $limit
                         """,
                         limit=self.top_k, uid=user_id,
-                        start=time_window_start, end=time_window_end
+                        start=time_window_start, end=time_window_end,
                     )
                     records = await result.data()
 
@@ -640,68 +815,222 @@ class KnowledgeBaseEngine:
             logger.error(f"BM25 Retrieval Error: {e}")
             return []
 
-    async def _retrieve_sql_crm_context(self, query: str) -> List[ScoredCandidate]:
-        """
-        第四通道：拉取外部共享 PostgreSQL 中的结构化业务数据。
-        仅在查询命中 CRM 语义关键词时执行，避免污染普通对话检索。
-        """
-        from .sql.retriever import is_crm_query, query_crm_context, format_crm_rows
+    def _extract_sql_keywords(self, query: str) -> List[str]:
+        """Extract compact keywords for exact SQL dialogue fallback."""
+        import re
 
-        if not is_crm_query(query):
+        raw = str(query or "").strip()
+        if not raw:
             return []
+
+        keywords: List[str] = []
+        for word in re.findall(r"[A-Za-z0-9_]{2,}", raw):
+            keywords.append(word.lower())
+
+        cjk = "".join(re.findall(r"[\u4e00-\u9fff]", raw))
+        stop_chars = set("的是了有多少吗呢啊吧呀我你他她它们这那哪什么怎么如何请帮告诉一下一个以及和与或在把被给要想问第天时候")
+        compact = "".join(ch for ch in cjk if ch not in stop_chars)
+
+        for size in (4, 3, 2):
+            for i in range(0, max(0, len(compact) - size + 1)):
+                term = compact[i : i + size]
+                if term and term not in keywords:
+                    keywords.append(term)
+
+        for ch in compact:
+            if ch not in keywords and ch in {"厚", "宽", "高", "长", "米", "钱", "日", "天"}:
+                keywords.append(ch)
+
+        return keywords[:16]
+
+    async def _retrieve_sql_keyword_context(self, query: str, user_id: Optional[str]) -> List[ScoredCandidate]:
+        """Direct keyword fallback over raw SQL chat messages."""
+        if not user_id:
+            return []
+        keywords = self._extract_sql_keywords(query)
+        if not keywords:
+            return []
+
+        from memory.sql.pool import get_db
+
+        def _row_get(row, key, default=None):
+            try:
+                if isinstance(row, dict):
+                    return row.get(key, default)
+                return row[key]
+            except Exception:
+                return default
 
         try:
-            rows = await query_crm_context(
-                query=query,
-                tenant_id=postgres_config.tenant_id,
-                limit=8,
-            )
-            if not rows:
-                return []
+            async with get_db() as conn:
+                is_sqlite = "sqlite" in str(type(conn)).lower()
+                clauses = []
+                params = []
+                for idx, kw in enumerate(keywords):
+                    like = f"%{kw}%"
+                    if is_sqlite:
+                        clauses.append("LOWER(m.content) LIKE ?")
+                    else:
+                        clauses.append(f"LOWER(m.content) LIKE ${idx + 2}")
+                    params.append(like.lower())
 
-            text = format_crm_rows(rows)
-            return [
-                ScoredCandidate(
-                    content=text,
-                    speaker="CRM数据库",
-                    source_type="sql",
-                    timestamp="",
-                    graph_validated=False,
-                    source_name="Business CRM",
-                    semantic_score=0.9,
-                    time_decay_score=1.0,
-                    graph_hop_score=0.0,
-                    impact_score=9.0,  # 结构化事实，高优先级
-                    confidence=1.0,
+                if is_sqlite:
+                    sql = (
+                        "SELECT m.id, m.role, m.speaker, m.content, m.timestamp, m.session_id "
+                        "FROM ef_chat_messages m "
+                        "JOIN ef_chat_sessions s ON s.session_id = m.session_id "
+                        f"WHERE s.user_id = ? AND ({' OR '.join(clauses)}) "
+                        "ORDER BY m.id DESC LIMIT 200"
+                    )
+                    cursor = await conn.execute(sql, (user_id, *params))
+                    rows = await cursor.fetchall()
+                else:
+                    sql = (
+                        "SELECT m.id, m.role, m.speaker, m.content, m.timestamp, m.session_id "
+                        "FROM ef_chat_messages m "
+                        "JOIN ef_chat_sessions s ON s.session_id = m.session_id "
+                        f"WHERE s.user_id = $1 AND ({' OR '.join(clauses)}) "
+                        "ORDER BY m.id DESC LIMIT 200"
+                    )
+                    rows = await conn.fetch(sql, user_id, *params)
+
+            import re
+
+            def _norm_text(value: str) -> str:
+                return re.sub(r"[^\w\u4e00-\u9fff]", "", str(value or "")).lower()
+
+            query_norm = _norm_text(query)
+            failure_markers = (
+                "没有记录到",
+                "未记录",
+                "没有这件事",
+                "不在记忆中",
+                "no record",
+                "not recorded",
+            )
+            numeric_or_day_pattern = (
+                r"(\d+|[\u4e00-\u9fff]+)\s*"
+                r"(\u7c73|\u4e08|\u5c3a|\u5929|\u65e5|\u5e74|\u6b65|\u91cc|\u516c\u91cc|cm|m|km)"
+            )
+
+            scored = []
+            for row in rows or []:
+                content = str(_row_get(row, "content") or "")
+                content_l = content.lower()
+                content_norm = _norm_text(content)
+                role = str(_row_get(row, "role") or "")
+
+                if any(marker in content_l for marker in failure_markers):
+                    continue
+                if query_norm and content_norm == query_norm:
+                    continue
+                if role.lower() == "user" and ("?" in content or "？" in content) and not re.search(numeric_or_day_pattern, content, re.I):
+                    continue
+
+                matched = [kw for kw in keywords if kw.lower() in content_l]
+                if not matched:
+                    continue
+                score = len(matched) / max(1, min(len(keywords), 8))
+                if role.lower() == "user":
+                    score += 0.15
+                if re.search(numeric_or_day_pattern, content, re.I):
+                    score += 0.35
+                if "第" in content and ("天" in content or "日" in content):
+                    score += 0.25
+                scored.append((score, row, matched))
+
+            scored.sort(key=lambda item: (item[0], int(_row_get(item[1], "id") or 0)), reverse=True)
+
+            candidates = []
+            for score, row, matched in scored[:5]:
+                ts = _row_get(row, "timestamp")
+                t_str = ts.isoformat() if hasattr(ts, "isoformat") else str(ts or "")
+                mid = _row_get(row, "id")
+                content = str(_row_get(row, "content") or "").strip()
+                if len(content) > 360:
+                    content = content[:357] + "..."
+                candidates.append(
+                    ScoredCandidate(
+                        content=f"原始对话命中：{content}",
+                        speaker=str(_row_get(row, "speaker") or _row_get(row, "role") or "user"),
+                        source_type="sql",
+                        timestamp=t_str,
+                        source_name=f"SQL原始对话(match={','.join(matched[:5])})",
+                        semantic_score=min(1.0, score),
+                        time_decay_score=1.0,
+                        graph_hop_score=0.8,
+                        impact_score=9.5,
+                        confidence=1.0,
+                        source_msg_id=int(mid) if mid is not None else None,
+                    )
                 )
-            ]
-        except Exception as exc:
-            logger.warning("[SQL CRM] retrieval failed: %s", exc)
+            return candidates
+        except Exception as e:
+            logger.error("[KnowledgeEngine] SQL keyword retrieval error: %s", e)
             return []
 
-
     async def _retrieve_structured_events(self, query: str, user_id: str = None, time_start: str = None, time_end: str = None) -> List[ScoredCandidate]:
-        """SQL memory events retrieval track."""
+        """SQL memory events retrieval track.
+
+        Two passes:
+          1) Typed: keyword triggers map a query to one or more MainEventType,
+             then call aggregate_events / aggregate_quantities / list_events.
+          2) Fallback: when the query carries aggregation/inventory intent
+             but typed pass returned nothing, surface every event with a
+             non-null quantity for this owner so the LLM can compose a
+             total. This catches resource events that older extractor
+             passes failed to tag with the correct main_type.
+        """
         from memory.sql.event_repository import EventRepository
         from memory.event.slots import MainEventType
         from .scoring import ScoredCandidate
         q, candidates, repo = query.lower(), [], EventRepository()
+
         triggers = {
             MainEventType.FINANCE: ["花", "买", "钱", "工资", "支出", "账单", "spending", "cost", "money", "buy"],
             MainEventType.HEALTH: ["体重", "身高", "心率", "血压", "运动", "健康", "weight", "height", "health"],
+            MainEventType.RESOURCE: [
+                "物资", "军需", "粮草", "粮食", "补给", "装备", "军械", "武器", "兵器",
+                "马匹", "战马", "库存", "缴获", "战利品", "辎重", "军备", "弹药",
+                "inventory", "supply", "supplies", "logistics", "stock", "materiel",
+            ],
+            MainEventType.PROPERTY: ["资产", "财产", "房产", "持有", "所有", "property", "asset"],
+            MainEventType.CONSUMPTION: ["消耗", "用掉", "损耗", "消费", "consume", "consumption"],
         }
         target_types = [etype for etype, kws in triggers.items() if any(k in q for k in kws)]
-        if not target_types: return []
+        agg_intent = any(k in q for k in [
+            "多少", "总共", "合计", "总量", "总数", "总计", "明细", "列出", "列表", "清单", "盘点", "现在有",
+            "total", "sum", "how much", "list", "inventory",
+        ])
+
+        if not target_types and not agg_intent:
+            return []
+
         try:
             for etype in target_types:
-                if any(k in q for k in ["多少", "总共", "合计", "total", "sum", "how much"]):
+                if etype == MainEventType.FINANCE and agg_intent:
+                    # Currency-based aggregator (legacy financial path).
                     results = await repo.aggregate_events(owner_id=user_id, main_type=etype, time_start=time_start, time_end=time_end)
                     for res in results:
                         candidates.append(ScoredCandidate(
                             content=f"财务统计：总支出 {res['total_amount']} {res['currency']} (共 {res['count']} 笔交易)",
                             speaker="财务管家", source_type="structured", source_name="SQL:Aggregate", timestamp="",
                             semantic_score=1.0, impact_score=9.0))
-                recent = await repo.list_events(owner_id=user_id, main_type=etype, time_start=time_start, time_end=time_end, limit=5)
+                elif agg_intent:
+                    # Quantity-based aggregator (resources / inventory / supplies).
+                    rows = await repo.aggregate_quantities(owner_id=user_id, main_type=etype, time_start=time_start, time_end=time_end)
+                    for r in rows:
+                        unit = r.get("quantity_unit") or ""
+                        subj = r.get("subject") or ""
+                        obj = r.get("object") or ""
+                        sub = r.get("subtype") or ""
+                        label = obj or subj or sub or "(unknown)"
+                        candidates.append(ScoredCandidate(
+                            content=f"[{etype.value}] 累计 {label}: {r['total_quantity']} {unit} (共 {r['count']} 条记录)",
+                            speaker="物资台账", source_type="structured", source_name="SQL:Aggregate",
+                            timestamp="", semantic_score=1.0, impact_score=9.0))
+
+                recent = await repo.list_events(owner_id=user_id, main_type=etype, time_start=time_start, time_end=time_end, limit=10)
                 for ev in recent:
                     detail = f"[{ev['main_type']}] {ev['subject']} {ev['predicate']} {ev['object'] or ''}"
                     val = f" ({ev['amount']} {ev['currency'] or 'CNY'})" if ev['amount'] else f" ({ev['quantity']} {ev['quantity_unit'] or ''})" if ev['quantity'] else ""
@@ -709,6 +1038,36 @@ class KnowledgeBaseEngine:
                         content=detail + val, speaker="结构化记忆", source_type="structured",
                         timestamp=str(ev.get('event_time') or ev.get('created_at') or ''), source_name="SQL:Events",
                         semantic_score=0.9, impact_score=8.5, source_msg_id=ev.get('source_msg_id')))
+
+            # Fallback: aggregation intent without strong type match, OR
+            # typed pass returned no candidates. Pull every quantitative event.
+            if agg_intent and not candidates:
+                rows = await repo.aggregate_quantities(owner_id=user_id, time_start=time_start, time_end=time_end)
+                for r in rows:
+                    unit = r.get("quantity_unit") or ""
+                    subj = r.get("subject") or ""
+                    obj = r.get("object") or ""
+                    label = obj or subj or "(unknown)"
+                    candidates.append(ScoredCandidate(
+                        content=f"[QTY] 累计 {label}: {r['total_quantity']} {unit} (共 {r['count']} 条记录)",
+                        speaker="物资台账", source_type="structured", source_name="SQL:Aggregate",
+                        timestamp="", semantic_score=0.95, impact_score=8.8))
+                # Also surface the raw rows so the LLM can attribute by date/source.
+                recent_any = await repo.list_quantitative_events(
+                    owner_id=user_id, time_start=time_start, time_end=time_end, limit=20
+                )
+                for ev in recent_any:
+                    val = f" ({ev['quantity']} {ev['quantity_unit'] or ''})"
+                    detail = f"[{ev['main_type']}] {ev['subject']} {ev['predicate']} {ev['object'] or ''}"
+                    candidates.append(ScoredCandidate(
+                        content=detail + val,
+                        speaker="结构化记忆", source_type="structured",
+                        timestamp=str(ev.get('event_time') or ev.get('created_at') or ''),
+                        source_name="SQL:QtyFallback",
+                        semantic_score=0.8, impact_score=8.0,
+                        source_msg_id=ev.get('source_msg_id'),
+                    ))
+
             return candidates
         except Exception as e:
             import logging
@@ -1007,6 +1366,8 @@ class KnowledgeBaseEngine:
                 tag = "[EPISODE]"
             elif res.graph_validated:
                 tag = "[GRAPH_CORE]"
+            elif res.source_type == "sql":
+                tag = "[SQL_EVIDENCE]"
             else:
                 tag = "[MEMORY]"
 

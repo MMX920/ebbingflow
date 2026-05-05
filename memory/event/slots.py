@@ -44,6 +44,7 @@ class MainEventType(str, Enum):
     OPINION = "OPINION"
     LEGAL = "LEGAL"
     SYSTEM = "SYSTEM"
+    RESOURCE = "RESOURCE"  # quantitative inventory / supply / logistics deltas
 
 
 class TypedPayload(BaseModel):

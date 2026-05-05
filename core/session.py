@@ -131,6 +131,35 @@ class ChatSession:
         self.history.append(msg)
         return msg
 
+    async def async_add_user_message(self, content: str, name: Optional[str] = None, timestamp: Optional[str] = None) -> ChatMessage:
+        msg = ChatMessage(role="user", content=content, name=name or self.user_id, timestamp=timestamp)
+        if self.history_repo:
+            try:
+                if hasattr(self.history_repo, "async_append_turn"):
+                    msg_id = await self.history_repo.async_append_turn(
+                        user_id=self.user_id,
+                        session_id=self.session_id,
+                        role="user",
+                        speaker=name or self.user_id,
+                        content=content,
+                        timestamp=timestamp,
+                    )
+                else:
+                    msg_id = self.history_repo.append_turn(
+                        user_id=self.user_id,
+                        session_id=self.session_id,
+                        role="user",
+                        speaker=name or self.user_id,
+                        content=content,
+                        timestamp=timestamp,
+                    )
+                msg.msg_id = msg_id
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"SQL Persistence failed (User): {e}")
+        self.history.append(msg)
+        return msg
+
     def add_assistant_message(self, content: str, name: Optional[str] = None, timestamp: Optional[str] = None) -> ChatMessage:
         msg = ChatMessage(role="assistant", content=content, name=name, timestamp=timestamp)
         if self.history_repo:
@@ -140,6 +169,35 @@ class ChatSession:
                     user_id=self.user_id, session_id=self.session_id,
                     role="assistant", speaker="assistant", content=content, timestamp=timestamp
                 )
+                msg.msg_id = msg_id
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"SQL Persistence failed (Asst): {e}")
+        self.history.append(msg)
+        return msg
+
+    async def async_add_assistant_message(self, content: str, name: Optional[str] = None, timestamp: Optional[str] = None) -> ChatMessage:
+        msg = ChatMessage(role="assistant", content=content, name=name, timestamp=timestamp)
+        if self.history_repo:
+            try:
+                if hasattr(self.history_repo, "async_append_turn"):
+                    msg_id = await self.history_repo.async_append_turn(
+                        user_id=self.user_id,
+                        session_id=self.session_id,
+                        role="assistant",
+                        speaker=name or "assistant",
+                        content=content,
+                        timestamp=timestamp,
+                    )
+                else:
+                    msg_id = self.history_repo.append_turn(
+                        user_id=self.user_id,
+                        session_id=self.session_id,
+                        role="assistant",
+                        speaker=name or "assistant",
+                        content=content,
+                        timestamp=timestamp,
+                    )
                 msg.msg_id = msg_id
             except Exception as e:
                 import logging

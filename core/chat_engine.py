@@ -61,6 +61,7 @@ SYSTEM_PROMPT_TEMPLATE = """
 5. 【双画像执行】：回答前先校准“你是谁”（assistant_persona_injection），再根据用户画像（user_profile + persona_injection）调整语气、颗粒度与建议路径。
 6. 【记忆表达约束】：面向用户叙述记忆时，只能使用“我记得/我记忆中/我这边记录到”这类自然表达；禁止使用“图谱/数据库/向量召回/检索命中/节点/关系”等系统实现术语，除非用户明确要求技术审计细节。
 7. 【证据优先级】：[SQL_EVIDENCE] 与 [GRAPH_CORE] 是事实依据；[EPISODE]/[SAGA] 只是叙事摘要，不能覆盖原文证据。若摘要和证据冲突，必须以 SQL_EVIDENCE/GRAPH_CORE 为准。
+8. 【证据归属约束】：当用户追问“这是我告诉你的吗”“第几天告诉你的”“你从哪里知道的”“是不是你自己想象/推断的”时，只能依据 SQL_EVIDENCE、GRAPH_CORE 或原始对话记录回答。若没有明确记录，必须直接说“我没有记录到”，禁止用历史常识、合理推测、角色设定或叙事补全来回答；也禁止把推断说成记忆。
 
 {external_system_prompt_block}
 
@@ -523,7 +524,7 @@ class ChatEngine:
         start_s1 = time.perf_counter()
         await _emit("01", "doing")
         session.clear_context_canvas()
-        session.add_user_message(user_input, timestamp=simulated_at)
+        await session.async_add_user_message(user_input, timestamp=simulated_at)
         session.context_canvas["latest_user_input"] = user_input
         if external_system_prompt:
             session.context_canvas["external_system_prompt"] = str(external_system_prompt).strip()
@@ -671,7 +672,7 @@ class ChatEngine:
                 assistant_timestamp = (datetime.fromisoformat(simulated_at) + timedelta(seconds=45)).isoformat()
             except ValueError:
                 assistant_timestamp = simulated_at
-        session.add_assistant_message(full_ai_response, timestamp=assistant_timestamp)
+        await session.async_add_assistant_message(full_ai_response, timestamp=assistant_timestamp)
         
         await _emit("09", "doing") # 知识脱水
         await _emit("10", "doing") # 事实校验

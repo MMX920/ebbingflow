@@ -35,7 +35,6 @@ from memory.identity.state_reducer import reduce_identity_state
 from memory.identity.conflict_resolver import ConflictResolver, ConflictCandidate
 from memory.identity.manager import PersonaManager
 from memory.knowledge_engine import KnowledgeBaseEngine
-from memory.integration.crm_sync import CRMChange, CRMUpsertRequest, CRMReplayRequest, normalize_crm_payload, build_conflict_candidates, make_idempotency_key
 from memory.integration.cdc_checkpoint import CDCCheckpointManager
 from neo4j import AsyncGraphDatabase
 from bridge.llm import LLMBridge
@@ -47,8 +46,6 @@ history_repo_global = None
 user_sessions = {}
 global_db_driver = None 
 checkpoint_manager = None
-crm_audit_cache = []
-crm_replay_stats = {"processed": 0, "skipped": 0, "failed": 0}
 USER_TOKEN_SECRET = (
     os.getenv("USER_TOKEN_SECRET")
     or server_config.ws_auth_token
@@ -822,11 +819,11 @@ async def lifespan(app: FastAPI):
         from memory.sql.pool import get_pool
         sql_pool = await get_pool()
         if sql_pool:
-            print(f"[SQL] PostgreSQL pool ready (tenant={postgres_config.tenant_id or 'not set'})")
+            print("[SQL] PostgreSQL pool ready")
         else:
-            print("[SQL] PostgreSQL configured but pool creation failed; CRM queries disabled")
+            print("[SQL] PostgreSQL configured but pool creation failed")
     else:
-        print("[SQL] PostgreSQL not fully configured; CRM queries disabled (set POSTGRES_DSN or POSTGRES_PASSWORD)")
+        print("[SQL] PostgreSQL not fully configured; using SQLite fallback")
 
     yield
     print("EbbingFlow Brain Shutting Down")
@@ -1856,10 +1853,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 "resolution_audit": ws_session.context_canvas.get("resolution_audit", []),
                 "history": monitor_history or _session_history_payload(),
                 "conflict_audit": ws_session.identity_state.get("conflict_trace", {}),
-                "identity_inference_status": ws_session.context_canvas.get("identity_inference_status") or {},
-                "crm_sync_status": "enabled" if identity_config.enable_crm_sync else "disabled",
-                "crm_conflict_audit": crm_audit_cache,
-                "crm_replay_stats": crm_replay_stats
+                "identity_inference_status": ws_session.context_canvas.get("identity_inference_status") or {}
             })
             if (
                 websocket.client_state == WebSocketState.CONNECTED
@@ -2068,101 +2062,6 @@ async def identity_reinfer(request: Request, force: bool = False, user_id: str =
         source="manual_api",
     )
     return result
-
-@app.post("/crm/upsert")
-async def crm_upsert(req: CRMUpsertRequest, request: Request):
-    """L3: Inbound upsert with conflict arbitration."""
-    if not _is_maintenance_authorized(request):
-        raise HTTPException(status_code=401, detail="Unauthorized maintenance request")
-    if not identity_config.enable_crm_sync:
-        return {"status": "disabled", "message": "CRM sync disabled"}
-    
-    ALLOWED_SLOTS = {
-        "name": "name",
-        "role": "role",
-        "state": "current_state",
-        "aliases": "aliases"
-    }
-    
-    results = []
-    async with global_db_driver.session(database=neo4j_config.database) as neosession:
-        for change in req.changes:
-            if change.slot not in ALLOWED_SLOTS:
-                results.append({"id": change.external_event_id, "status": "ignored", "reason": "invalid_slot"})
-                continue
-            
-            db_slot = ALLOWED_SLOTS[change.slot]
-            
-            curr_res = await neosession.run(
-                f"MATCH (e:Entity {{entity_id: $eid, owner_id: $oid}}) RETURN properties(e)[$slot] AS val, properties(e)[$slot + '_source'] AS src, properties(e)[$slot + '_confidence'] AS conf",
-                eid=change.target_id, oid=change.owner_id, slot=db_slot
-            )
-            curr = await curr_res.single()
-            
-            candidates = []
-            if curr and curr["val"]:
-                candidates.append(ConflictCandidate(
-                    value=str(curr["val"]),
-                    source=curr["src"] or "system",
-                    confidence=curr["conf"] or 1.0,
-                    record_time="2000-01-01"
-                ))
-            
-            crm_cands = build_conflict_candidates(change, identity_config.crm_source_weight)
-            for cand in crm_cands:
-                candidates.append(cand)
-            
-            arb = ConflictResolver.resolve_conflict(change.slot, candidates)
-            
-            audit_entry = {
-                "external_id": change.external_event_id, "slot": change.slot,
-                "winner": arb.winner, "reason": arb.winner_reason, "timestamp": time.strftime("%H:%M:%S")
-            }
-            crm_audit_cache.append(audit_entry)
-            if len(crm_audit_cache) > 20: crm_audit_cache.pop(0)
-
-            if arb.winner == change.value:
-                await neosession.run(
-                    f"MATCH (e:Entity {{entity_id: $eid, owner_id: $oid}}) "
-                    f"SET e.{db_slot} = $val, e.{db_slot}_source = 'crm', e.{db_slot}_confidence = $conf, e.updated_at = $now",
-                    eid=change.target_id, oid=change.owner_id, val=change.value, conf=change.confidence, now=change.timestamp
-                )
-                results.append({"id": change.external_event_id, "status": "applied"})
-            else:
-                results.append({"id": change.external_event_id, "status": "ignored", "reason": "arbitration_lost"})
-    
-    return {"status": "success", "results": results}
-
-@app.post("/crm/events/replay")
-async def crm_replay(req: CRMReplayRequest, request: Request):
-    """L4: Replay historical CRM events with idempotency checks."""
-    if not _is_maintenance_authorized(request):
-        raise HTTPException(status_code=401, detail="Unauthorized maintenance request")
-    processed = 0
-    skipped = 0
-    failed = 0
-    for change in req.changes:
-        key = make_idempotency_key(change.owner_id, change.external_event_id, change.slot, change.value)
-        if checkpoint_manager.is_replayed(key):
-            skipped += 1
-            crm_replay_stats["skipped"] += 1
-            continue
-        
-        try:
-            resp = await crm_upsert(CRMUpsertRequest(changes=[change]), request)
-            if resp.get("status") == "success":
-                checkpoint_manager.mark_replayed(key)
-                processed += 1
-                crm_replay_stats["processed"] += 1
-            else:
-                failed += 1
-                crm_replay_stats["failed"] += 1
-        except Exception as e:
-            logger.error(f"Replay item failure: {e}")
-            failed += 1
-            crm_replay_stats["failed"] += 1
-            
-    return {"status": "finished", "processed": processed, "skipped": skipped, "failed": failed}
 
 @app.post("/evolution/rollback/{event_id}")
 async def rollback_evolution(event_id: str, request: Request, user_id: str = None, user_token: str = None):
