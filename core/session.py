@@ -4,7 +4,7 @@
 import uuid
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 
 from config import memory_config
@@ -22,7 +22,7 @@ class ChatMessage:
         self.content = content
         self.name = name  # 可选：记录确切的 Entity Name
         self.msg_id = msg_id # 从数据库中获取的自增 ID (用于证据链)
-        self.timestamp = timestamp or datetime.now().isoformat()
+        self.timestamp = timestamp or datetime.now(timezone.utc).isoformat()
 
     def to_dict(self) -> Dict[str, Any]:
         msg = {
@@ -63,7 +63,7 @@ class ChatSession:
             "asst_canonical": "andrew",
             "user_canonical": "user",
             "source": "default",      # 优先级: explicit > history > default
-            "updated_at": datetime.now().isoformat()
+            "updated_at": datetime.now(timezone.utc).isoformat()
         }
 
         # 尝试从仓储恢复会话 (不再直接使用 VectorStorer)

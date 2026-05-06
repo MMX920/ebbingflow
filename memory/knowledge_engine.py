@@ -26,6 +26,10 @@ from config import neo4j_config, embed_config, memory_config, identity_config
 from .scoring import HybridScorer, ScoredCandidate, UnifiedMemoryResult
 
 logger = logging.getLogger(__name__)
+_SHANGHAI_TZ = timezone(timedelta(hours=8))
+
+def _utc_z(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 class KnowledgeBaseEngine:
     """混合动力记忆引擎"""
@@ -331,19 +335,18 @@ class KnowledgeBaseEngine:
 
     def _infer_time_window(self, query: str) -> tuple[Optional[str], Optional[str], str]:
         """Infer a coarse time window from natural-language query text."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(timezone.utc).astimezone(_SHANGHAI_TZ)
         q = str(query or "").lower()
 
         def _day_window(day):
-            iso = day.isoformat()
-            return f"{iso}T00:00:00Z", f"{iso}T23:59:59Z", "nlp_inferred"
+            start = datetime.combine(day, datetime.min.time(), tzinfo=_SHANGHAI_TZ)
+            end = start + timedelta(days=1) - timedelta(seconds=1)
+            return _utc_z(start), _utc_z(end), "nlp_inferred"
 
         def _range_window(start_day, end_day):
-            return (
-                f"{start_day.isoformat()}T00:00:00Z",
-                f"{end_day.isoformat()}T23:59:59Z",
-                "nlp_inferred",
-            )
+            start = datetime.combine(start_day, datetime.min.time(), tzinfo=_SHANGHAI_TZ)
+            end = datetime.combine(end_day, datetime.min.time(), tzinfo=_SHANGHAI_TZ) + timedelta(days=1) - timedelta(seconds=1)
+            return _utc_z(start), _utc_z(end), "nlp_inferred"
 
         if "今天" in q or "今日" in q or "刚刚" in q:
             return _day_window(now.date())
@@ -998,10 +1001,28 @@ class KnowledgeBaseEngine:
             MainEventType.CONSUMPTION: ["消耗", "用掉", "损耗", "消费", "consume", "consumption"],
         }
         target_types = [etype for etype, kws in triggers.items() if any(k in q for k in kws)]
+        supplemental_triggers = {
+            MainEventType.OPINION: [
+                "喜欢", "不喜欢", "讨厌", "避雷", "推荐", "不推荐", "好喝", "难喝", "好吃", "难吃",
+                "偏好", "体验", "性价比", "下次", "以后不", "preference", "like", "dislike", "avoid",
+            ],
+            MainEventType.TASK: ["待办", "任务", "提醒", "记得", "别忘", "todo", "task", "reminder"],
+            MainEventType.SCHEDULE: ["计划", "安排", "日程", "预约", "开会", "明天", "后天", "schedule", "plan"],
+            MainEventType.PLAN: ["计划", "打算", "准备", "安排", "plan"],
+        }
+        for etype, kws in supplemental_triggers.items():
+            if etype not in target_types and any(k in q for k in kws):
+                target_types.append(etype)
         agg_intent = any(k in q for k in [
             "多少", "总共", "合计", "总量", "总数", "总计", "明细", "列出", "列表", "清单", "盘点", "现在有",
             "total", "sum", "how much", "list", "inventory",
         ])
+
+        if not agg_intent:
+            agg_intent = any(k in q for k in [
+                "多少", "总共", "合计", "总量", "总数", "总计", "明细", "列出", "列表", "清单", "盘点", "现在有",
+                "花了多少钱", "花多少钱", "买了什么", "消费多少",
+            ])
 
         if not target_types and not agg_intent:
             return []

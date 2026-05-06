@@ -71,6 +71,7 @@ class EventEnvelope(BaseModel):
     main_type: MainEventType
     subtype: Optional[str] = None
     event_time: Optional[str] = None # ISO format or natural language before normalization
+    event_time_precision: Optional[str] = None # exact | part_of_day | day | message
     subject: str
     predicate: str
     object: Optional[str] = None

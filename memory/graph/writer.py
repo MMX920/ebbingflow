@@ -29,6 +29,8 @@ from memory.event.slots import (
 )
 from memory.sql.event_repository import EventRepository
 from memory.event.normalizer import ContentNormalizerAgent
+from memory.event.rule_extractor import RuleBasedStructuredExtractor
+from memory.event.temporal import resolve as _resolve_temporal_anchor
 
 from memory.identity.canonical import canonicalize_entity
 from memory.integration.cdc_outbox import outbox
@@ -785,6 +787,7 @@ class GraphWriterMiddleware(BaseMiddleware):
         self.extractor = EventExtractor()
         self.event_repo = EventRepository()
         self.normalizer = ContentNormalizerAgent()
+        self.rule_extractor = RuleBasedStructuredExtractor()
         try:
             from memory.integration.episode_manager import EpisodeManager
             self.episode_manager = EpisodeManager()
@@ -840,10 +843,33 @@ class GraphWriterMiddleware(BaseMiddleware):
 
         actor = getattr(session, "current_actor", None)
         current_step = "08"
+        rule_envelopes = []
+        llm_envelopes = []
+        normalized_envelopes = []
+        written_event_count = 0
         try:
             step_started = time.perf_counter()
             valid_events, candidate_events, relations, observations, valid_envelopes = await self.extractor.extract_events_from_text(
                 last_user_msg_text, actor, source_msg_id=source_msg_id
+            )
+            llm_envelopes = list(valid_envelopes or [])
+            resolved_anchor_dt, resolved_precision, resolved_part = _resolve_temporal_anchor(
+                last_user_msg_text, source_timestamp
+            )
+            resolved_anchor_iso = resolved_anchor_dt.isoformat()
+            for env in llm_envelopes:
+                if not getattr(env, "event_time", None):
+                    env.event_time = resolved_anchor_iso
+                    env.event_time_precision = resolved_precision
+                    if resolved_part and isinstance(env.metadata, dict):
+                        env.metadata.setdefault("time_part", resolved_part)
+                elif not getattr(env, "event_time_precision", None):
+                    env.event_time_precision = "exact"
+            rule_envelopes = self.rule_extractor.extract(
+                last_user_msg_text,
+                actor_name=getattr(actor, "speaker_name", None) if actor else None,
+                source_msg_id=source_msg_id,
+                source_timestamp=source_timestamp,
             )
             for event in valid_events:
                 if source_timestamp and not getattr(event, "event_time", None):
@@ -878,10 +904,10 @@ class GraphWriterMiddleware(BaseMiddleware):
 
             current_step = "10"
             step_started = time.perf_counter()
-            normalized_envelopes = []
-            if valid_envelopes:
+            merged_envelopes = self._merge_structured_envelopes(rule_envelopes, llm_envelopes)
+            if merged_envelopes:
                 # 0. Normalization
-                normalized_envelopes = self.normalizer.normalize_envelopes(valid_envelopes)
+                normalized_envelopes = self.normalizer.normalize_envelopes(merged_envelopes)
             await finish_step("10", step_started)
 
             current_step = "11"
@@ -894,6 +920,7 @@ class GraphWriterMiddleware(BaseMiddleware):
                 await self.writer.write_relations(relations, session.session_id, session.user_id, current_names, chat_session=session)
 
             # --- [Structured Memory Events] ---
+            structured_errors = []
             if normalized_envelopes:
                 for env in normalized_envelopes:
                     try:
@@ -902,8 +929,42 @@ class GraphWriterMiddleware(BaseMiddleware):
                         # 2. Evidence Link
                         if event_id and source_msg_id:
                             await self.event_repo.link_evidence(event_id, source_msg_id)
+                        if event_id:
+                            written_event_count += 1
+                        else:
+                            structured_errors.append(
+                                f"{env.main_type.value}/{env.subtype or ''}/{env.object or ''}: "
+                                f"{getattr(self.event_repo, 'last_error', None) or 'insert_event returned None'}"
+                            )
                     except Exception as env_err:
                         logging.getLogger(__name__).error(f"[EventSQL] Sync failed: {env_err}")
+                        structured_errors.append(
+                            f"{env.main_type.value}/{env.subtype or ''}/{env.object or ''}: {env_err}"
+                        )
+                await self.event_repo.record_extraction_audit(
+                    owner_id=session.user_id,
+                    session_id=session.session_id,
+                    message_id=source_msg_id,
+                    status="success" if written_event_count == len(normalized_envelopes) else "partial",
+                    rule_event_count=len(rule_envelopes),
+                    llm_event_count=len(llm_envelopes),
+                    normalized_event_count=len(normalized_envelopes),
+                    written_event_count=written_event_count,
+                    error="; ".join(structured_errors)[:2000] if structured_errors else None,
+                    metadata={"source": "response_phase"},
+                )
+            else:
+                await self.event_repo.record_extraction_audit(
+                    owner_id=session.user_id,
+                    session_id=session.session_id,
+                    message_id=source_msg_id,
+                    status="empty",
+                    rule_event_count=len(rule_envelopes),
+                    llm_event_count=len(llm_envelopes),
+                    normalized_event_count=0,
+                    written_event_count=0,
+                    metadata={"source": "response_phase"},
+                )
 
             episode = None
             # [M2.1] Episode generation and persistence
@@ -1010,8 +1071,47 @@ class GraphWriterMiddleware(BaseMiddleware):
         except Exception as e:
             import traceback
             logging.getLogger(__name__).error(f"[MemoryGraph] Error: {e}\n{traceback.format_exc()}")
+            await self.event_repo.record_extraction_audit(
+                owner_id=session.user_id,
+                session_id=session.session_id,
+                message_id=source_msg_id,
+                status="failed",
+                rule_event_count=len(rule_envelopes),
+                llm_event_count=len(llm_envelopes),
+                normalized_event_count=len(normalized_envelopes),
+                written_event_count=written_event_count,
+                error=str(e),
+                metadata={"source": "response_phase", "failed_step": current_step},
+            )
             await fail_remaining_steps(current_step, str(e))
 
         return ai_output
+
+    def _merge_structured_envelopes(self, rule_envelopes: List[EventEnvelope], llm_envelopes: List[EventEnvelope]) -> List[EventEnvelope]:
+        """Merge rule and LLM envelopes; rule facts win exact duplicates."""
+        merged: List[EventEnvelope] = []
+        seen = set()
+
+        def key(env: EventEnvelope):
+            amount = str(getattr(env.payload, "amount", "") or "")
+            quantity = str(getattr(env.payload, "quantity", "") or "")
+            unit = str(getattr(env.payload, "quantity_unit", "") or "")
+            return (
+                getattr(env.main_type, "value", str(env.main_type)),
+                str(env.subtype or ""),
+                str(env.object or "").strip().lower(),
+                amount,
+                quantity,
+                unit,
+                env.source_msg_id,
+            )
+
+        for env in list(rule_envelopes or []) + list(llm_envelopes or []):
+            k = key(env)
+            if k in seen:
+                continue
+            seen.add(k)
+            merged.append(env)
+        return merged
 
 

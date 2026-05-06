@@ -5,7 +5,7 @@ Handles CRUD operations for ef_memory_events with support for both PostgreSQL an
 import logging
 import json
 from typing import List, Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 import uuid
 
@@ -14,8 +14,20 @@ from memory.event.slots import EventEnvelope, MainEventType, TypedPayload, Norma
 
 logger = logging.getLogger(__name__)
 
+async def _ensure_sqlite_event_columns(conn) -> None:
+    """Add columns introduced after older SQLite databases were created."""
+    cursor = await conn.execute("PRAGMA table_info(ef_memory_events)")
+    rows = await cursor.fetchall()
+    columns = {str(dict(row).get("name") if hasattr(row, "keys") else row[1]) for row in rows}
+    if "event_time_precision" not in columns:
+        await conn.execute("ALTER TABLE ef_memory_events ADD COLUMN event_time_precision TEXT")
+        await conn.commit()
+
 class EventRepository:
     """Repository for structured memory events."""
+
+    def __init__(self):
+        self.last_error: Optional[str] = None
 
     async def insert_event(self, event: EventEnvelope, owner_id: str) -> Optional[str]:
         """
@@ -23,30 +35,31 @@ class EventRepository:
         Returns the event_id (UUID string) if successful or found existing.
         """
         # Ensure event_id exists (Application-side primary key generation for compatibility)
+        self.last_error = None
         ev_id = event.event_id or str(uuid.uuid4())
 
         sql_pg = """
         INSERT INTO ef_memory_events (
-            event_id, owner_id, main_type, subtype, event_time, subject, predicate, object,
+            event_id, owner_id, main_type, subtype, event_time, event_time_precision,
+            subject, predicate, object,
             quantity, quantity_unit, amount, currency, currency_source,
             confidence, source_msg_id, needs_confirmation, metadata
         ) VALUES (
-            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17
-        ) 
-        ON CONFLICT (owner_id, source_msg_id, main_type, subtype, subject, predicate, object) 
-        DO UPDATE SET updated_at = CURRENT_TIMESTAMP
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
+        )
         RETURNING event_id;
         """
-        
+
         sql_sqlite = """
         INSERT INTO ef_memory_events (
-            event_id, owner_id, main_type, subtype, event_time, subject, predicate, object,
+            event_id, owner_id, main_type, subtype, event_time, event_time_precision,
+            subject, predicate, object,
             quantity, quantity_unit, amount, currency, currency_source,
             confidence, source_msg_id, needs_confirmation, metadata
         ) VALUES (
-            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
         )
-        ON CONFLICT(owner_id, source_msg_id, main_type, subtype, subject, predicate, object) 
+        ON CONFLICT(owner_id, source_msg_id, main_type, subtype, subject, predicate, object)
         DO UPDATE SET updated_at = CURRENT_TIMESTAMP
         RETURNING event_id;
         """
@@ -60,12 +73,25 @@ class EventRepository:
                 return str(v)
             return v
 
+        event_time_val = event.event_time
+        if is_pg and isinstance(event_time_val, str):
+            try:
+                event_time_val = datetime.fromisoformat(event_time_val.replace("Z", "+00:00"))
+                if event_time_val.tzinfo is None:
+                    # Naive timestamps are treated as server local time; this
+                    # matches `datetime.now().isoformat()` semantics and avoids
+                    # a TZ drift when the container has TZ=Asia/Shanghai.
+                    event_time_val = event_time_val.astimezone()
+            except ValueError:
+                event_time_val = None
+
         params = [
             ev_id,
             owner_id,
             event.main_type.value,
             event.subtype,
-            event.event_time,
+            event_time_val,
+            event.event_time_precision,
             event.subject,
             event.predicate,
             event.object,
@@ -83,10 +109,37 @@ class EventRepository:
         try:
             async with get_db() as conn:
                 if is_pg:
+                    existing = await conn.fetchval(
+                        """
+                        SELECT event_id FROM ef_memory_events
+                        WHERE owner_id = $1
+                          AND source_msg_id IS NOT DISTINCT FROM $2
+                          AND main_type = $3
+                          AND subtype IS NOT DISTINCT FROM $4
+                          AND subject = $5
+                          AND predicate = $6
+                          AND object IS NOT DISTINCT FROM $7
+                        LIMIT 1
+                        """,
+                        owner_id,
+                        event.source_msg_id,
+                        event.main_type.value,
+                        event.subtype,
+                        event.subject,
+                        event.predicate,
+                        event.object,
+                    )
+                    if existing:
+                        await conn.execute(
+                            "UPDATE ef_memory_events SET updated_at = CURRENT_TIMESTAMP WHERE event_id = $1",
+                            existing,
+                        )
+                        return str(existing)
                     event_id = await conn.fetchval(sql_pg, *params)
                     return str(event_id)
                 else:
                     # SQLite fallback
+                    await _ensure_sqlite_event_columns(conn)
                     try:
                         cur = await conn.execute(sql_sqlite, params)
                         row = await cur.fetchone()
@@ -96,7 +149,7 @@ class EventRepository:
                     except Exception as e:
                         logger.debug("[EventRepo] SQLite INSERT fallback: %s", e)
                         find_sql = "SELECT event_id FROM ef_memory_events WHERE owner_id=? AND source_msg_id=? AND main_type=? AND subtype=? AND subject=? AND predicate=? AND object=?"
-                        cur = await conn.execute(find_sql, (params[1], params[14], params[2], params[3], params[5], params[6], params[7]))
+                        cur = await conn.execute(find_sql, (params[1], params[15], params[2], params[3], params[6], params[7], params[8]))
                         row = await cur.fetchone()
                         if row:
                             return str(row[0])
@@ -106,6 +159,7 @@ class EventRepository:
                         await conn.commit()
                         return ev_id
         except Exception as exc:
+            self.last_error = str(exc)
             logger.error("[EventRepo] Failed to insert event: %s", exc)
             return None
 
@@ -354,3 +408,70 @@ class EventRepository:
                     await conn.commit()
         except Exception as exc:
             logger.error("[EventRepo] Link evidence failed: %s", exc)
+
+    async def record_extraction_audit(
+        self,
+        *,
+        owner_id: str,
+        session_id: Optional[str],
+        message_id: Optional[int],
+        status: str,
+        rule_event_count: int = 0,
+        llm_event_count: int = 0,
+        normalized_event_count: int = 0,
+        written_event_count: int = 0,
+        error: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Persist structured extraction audit for observability and retry."""
+        metadata_json = json.dumps(metadata or {}, ensure_ascii=False)
+        try:
+            async with get_db() as conn:
+                is_pg = hasattr(conn, "fetch")
+                if is_pg:
+                    await conn.execute(
+                        """
+                        INSERT INTO ef_structured_extraction_audit (
+                            owner_id, session_id, message_id, status, rule_event_count,
+                            llm_event_count, normalized_event_count, written_event_count,
+                            error, metadata
+                        )
+                        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+                        """,
+                        owner_id,
+                        session_id,
+                        message_id,
+                        status,
+                        int(rule_event_count),
+                        int(llm_event_count),
+                        int(normalized_event_count),
+                        int(written_event_count),
+                        error,
+                        metadata_json,
+                    )
+                else:
+                    await conn.execute(
+                        """
+                        INSERT INTO ef_structured_extraction_audit (
+                            owner_id, session_id, message_id, status, rule_event_count,
+                            llm_event_count, normalized_event_count, written_event_count,
+                            error, metadata
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            owner_id,
+                            session_id,
+                            message_id,
+                            status,
+                            int(rule_event_count),
+                            int(llm_event_count),
+                            int(normalized_event_count),
+                            int(written_event_count),
+                            error,
+                            metadata_json,
+                        ),
+                    )
+                    await conn.commit()
+        except Exception as exc:
+            logger.error("[EventRepo] record_extraction_audit failed: %s", exc)

@@ -2137,12 +2137,24 @@ async def wipe_memory(req: WipeRequest, request: Request):
                         (uid,),
                     )
                     await conn.execute("DELETE FROM ef_chat_sessions WHERE user_id = ?", (uid,))
+                    # --- Clear structured memory tables ---
+                    for tbl in ("ef_event_evidence_links", "ef_memory_events", "ef_structured_extraction_audit"):
+                        try:
+                            await conn.execute(f"DELETE FROM {tbl} WHERE owner_id = ?", (uid,))
+                        except Exception:
+                            pass  # table may not exist yet
                 else:
                     await conn.execute(
                         "DELETE FROM ef_chat_messages WHERE session_id IN (SELECT session_id FROM ef_chat_sessions WHERE user_id = $1)",
                         uid,
                     )
                     await conn.execute("DELETE FROM ef_chat_sessions WHERE user_id = $1", uid)
+                    # --- Clear structured memory tables ---
+                    for tbl in ("ef_event_evidence_links", "ef_memory_events", "ef_structured_extraction_audit"):
+                        try:
+                            await conn.execute(f"DELETE FROM {tbl} WHERE owner_id = $1", uid)
+                        except Exception:
+                            pass  # table may not exist yet
                 await conn.commit()
             
             if uid in user_sessions:

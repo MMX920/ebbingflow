@@ -12,6 +12,14 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from memory.sql.pool import get_db, close_pool
 from config import postgres_config
 
+async def _ensure_sqlite_migrations(conn):
+    cursor = await conn.execute("PRAGMA table_info(ef_memory_events)")
+    rows = await cursor.fetchall()
+    columns = {str(dict(row).get("name") if hasattr(row, "keys") else row[1]) for row in rows}
+    if "event_time_precision" not in columns:
+        await conn.execute("ALTER TABLE ef_memory_events ADD COLUMN event_time_precision TEXT")
+        await conn.commit()
+
 async def setup_db():
     print("[DB Setup] Checking DB connection...")
     
@@ -35,7 +43,16 @@ async def setup_db():
                 sql = sql.replace("BIGSERIAL PRIMARY KEY", "INTEGER PRIMARY KEY AUTOINCREMENT")
                 sql = sql.replace("SERIAL PRIMARY KEY", "INTEGER PRIMARY KEY AUTOINCREMENT")
                 sql = sql.replace("TIMESTAMP WITH TIME ZONE", "TIMESTAMP")
-                sql = sql.replace("JSONB", "TEXT") 
+                sql = sql.replace("JSONB", "TEXT")
+                # SQLite ALTER TABLE 不支持 ADD COLUMN IF NOT EXISTS — 删除迁移语句
+                # 新建库 CREATE TABLE 已包含该列；旧库需手工迁移
+                import re as _re
+                sql = _re.sub(
+                    r"ALTER TABLE [^;]*ADD COLUMN IF NOT EXISTS[^;]*;",
+                    "",
+                    sql,
+                    flags=_re.IGNORECASE,
+                )
             else:
                 print(f"[DB Setup] Target: PostgreSQL ({postgres_config.db})")
 
@@ -50,6 +67,9 @@ async def setup_db():
                         await conn.execute(statement + ";")
             else:
                 await conn.execute(sql)
+
+            if is_sqlite:
+                await _ensure_sqlite_migrations(conn)
                 
             print("[DB Setup] Core tables initialized successfully.")
             return True

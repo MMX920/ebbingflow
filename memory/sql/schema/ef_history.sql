@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS ef_memory_events (
     main_type VARCHAR(32) NOT NULL, -- FINANCE, HEALTH, etc.
     subtype VARCHAR(64),
     event_time TIMESTAMP WITH TIME ZONE,
+    event_time_precision VARCHAR(16),
     subject VARCHAR(255) NOT NULL,
     predicate VARCHAR(255) NOT NULL,
     object VARCHAR(255),
@@ -74,3 +75,26 @@ WHERE source_msg_id IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_events_main_type ON ef_memory_events(main_type);
 CREATE INDEX IF NOT EXISTS idx_events_time ON ef_memory_events(event_time);
+
+-- Migration: backfill column on existing PG deployments (no-op on fresh DBs)
+ALTER TABLE ef_memory_events ADD COLUMN IF NOT EXISTS event_time_precision VARCHAR(16);
+
+-- 5. Structured extraction audit table
+CREATE TABLE IF NOT EXISTS ef_structured_extraction_audit (
+    id SERIAL PRIMARY KEY,
+    owner_id VARCHAR(64) NOT NULL,
+    session_id VARCHAR(64),
+    message_id BIGINT REFERENCES ef_chat_messages(id) ON DELETE SET NULL,
+    status VARCHAR(32) NOT NULL,
+    rule_event_count INT DEFAULT 0,
+    llm_event_count INT DEFAULT 0,
+    normalized_event_count INT DEFAULT 0,
+    written_event_count INT DEFAULT 0,
+    error TEXT,
+    metadata JSONB DEFAULT '{}',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_extraction_audit_owner_msg ON ef_structured_extraction_audit(owner_id, message_id);
+CREATE INDEX IF NOT EXISTS idx_extraction_audit_status ON ef_structured_extraction_audit(status);

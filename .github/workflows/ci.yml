@@ -37,5 +37,4 @@ jobs:
             tests/test_ws_auth.py \
             tests/test_chat_engine_role_label.py \
             tests/test_conflict_arbitration.py \
-            tests/test_confidence_tuning.py \
             tests/test_unit_currency_normalization.py

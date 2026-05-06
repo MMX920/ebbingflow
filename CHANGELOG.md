@@ -4,6 +4,9 @@ All notable changes to the EbbingFlow project will be documented in this file st
 
 ## [Unreleased]
 ### Added
+- **Deterministic structured-event extraction floor**: Added a rule-based extractor for high-confidence facts so money, resources, health measurements, symptoms, medication, dated plans, tasks, and preference/avoidance signals are no longer dependent on LLM JSON extraction alone.
+- **Structured extraction audit trail**: Added `ef_structured_extraction_audit` records for each response/backfill attempt, including rule event count, LLM event count, normalized count, written count, status, and error metadata.
+- **Structured event backfill**: Added `scripts/backfill_structured_events.py` to recover high-confidence structured events from historical `ef_chat_messages` rows, with `--dry-run`, owner filtering, and message-id filtering.
 - **Intent-aware memory priority**: Retrieval now classifies each turn as `fact`, `summary`, `long_term`, or `semantic`, then applies source-specific budgets and multipliers in `HybridScorer`.
 - **Narrative prompt lane**: Episode/Saga candidates are injected into a separate `[NARRATIVE]` context area and only when accepted by the scorer.
 - **Narrative-day recall**: Queries such as `第 61 天` / `day 23` now route through `narrative_day` filters, with a backfill script for historical memory events.
@@ -15,6 +18,10 @@ All notable changes to the EbbingFlow project will be documented in this file st
 - **OpenAI-compatible chat API**: Added `/v1/chat/completions` and `/api/chat/completions` for local external frontends, with non-streaming and SSE streaming responses.
 
 ### Changed
+- **Structured recall coverage**: Structured retrieval now triggers on `OPINION/preference`, `TASK`, `SCHEDULE`, and `PLAN` query language in addition to finance, health, resource, property, and consumption events.
+- **Chinese structured aggregation intent**: Finance/resource structured recall now recognizes Chinese aggregation questions such as "花了多少钱", "总共", "明细", "清单", and "盘点" even when the older mojibake trigger list misses them.
+- **Structured event write path**: Response-phase memory writing now merges deterministic rule events with LLM-extracted event envelopes, deduplicates exact matches, normalizes them, links evidence, and records audit status for success, empty, partial, or failed extraction.
+- **Preference capture from experiential facts**: Experiential finance messages such as failed purchases can now produce both a `FINANCE` event and an `OPINION/preference` event, preserving spend facts and future preference signals separately.
 - **Evidence-first retrieval**: Fact-style questions now prioritize SQL/Graph/Structured Evidence and strictly exclude zero-budget narrative fallbacks.
 - **Graph fallback safety**: Graph recall no longer falls back to unrelated global high-impact events when a query has no entity/time/narrative-day filter.
 - **Structured quantity aggregation**: RESOURCE loss/consumption events now subtract from inventory totals while preserving raw totals for audit.
@@ -28,6 +35,9 @@ All notable changes to the EbbingFlow project will be documented in this file st
 - Removed the experimental CRM sync and CRM SQL retrieval path from the open-source edition, including CRM API endpoints, CRM-specific SQL retriever code, config flags, and tests.
 
 ### Fixed
+- Fixed missing `event_time` values for LLM-extracted structured events causing empty timestamps in the database.
+- Fixed PostgreSQL structured-event writes failing against the existing partial idempotency index by replacing the unsupported compound `ON CONFLICT` target with an explicit duplicate lookup followed by insert.
+- Fixed structured-event insert failures being invisible by surfacing per-event insert errors in extraction audit `error` instead of silently returning `partial`.
 - Fixed fact attribution behavior so questions like "where did you know this from?" must rely on SQL/Graph/raw-record evidence instead of narrative summaries.
 - Fixed duplicated `inference_turn_count` increments between chat engine and API scheduling.
 - Fixed double-application of HybridScorer source multipliers.
