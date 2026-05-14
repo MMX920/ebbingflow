@@ -21,6 +21,12 @@
 
 ---
 
+## 🌐 Online Demo
+
+**Online Demo:** [ebbingflow.net](https://ebbingflow.net)
+
+---
+
 ## ⚡ Project Overview
 
 **EbbingFlow** is an AI assistant memory engine that integrates **Knowledge Graphs**, **Temporal Event Memory**, **Multi-Track Retrieval**, **Intelligent Reranking**, and the **Ebbinghaus Forgetting Curve**.
@@ -178,12 +184,6 @@ If you want to quickly preview the system's capabilities, you can import our pre
 2. Click **Import Demo Data** in the top right corner.
 3. Confirm the warning, and the system will automatically restore the cognitive state including identity profiles and memory chains.
 4. **Note**: Currency conversions between ancient and modern units in this demo may be inconsistent. This is intended to demonstrate EbbingFlow's core advantage: maintaining traceability and robustness even when handling "dirty" or logically flawed input data.
----
-
-## 🌐 Online Demo
-
-**Online Demo:** Coming soon... 
-
 ---
 
 ## 🎬 Video Demo
