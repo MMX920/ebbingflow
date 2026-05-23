@@ -59,8 +59,8 @@ class ChatSession:
 
         # 身份权利分级状态 (Identity Precedence State)
         self.identity_state = {
-            "asst_name": "Andrew",
-            "asst_canonical": "andrew",
+            "asst_name": "",
+            "asst_canonical": "assistant",
             "user_canonical": "user",
             "source": "default",      # 优先级: explicit > history > default
             "updated_at": datetime.now(timezone.utc).isoformat()

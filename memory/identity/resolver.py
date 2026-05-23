@@ -37,7 +37,7 @@ class IdentityResolverMiddleware(BaseMiddleware):
         在处理用户的输入之前，动态建立基础 Actor 状态。
         """
         try:
-            # 优先从配置中读取 master ID
+            # 优先从配置中读取 root ID
             current_user_id = identity_config.user_id
             current_asst_id = identity_config.assistant_id
 
@@ -56,9 +56,9 @@ class IdentityResolverMiddleware(BaseMiddleware):
             # --- 注入硬规则：规范化别名策略 (Canonical Alias Policy) ---
             session.context_canvas["CANONICAL_ALIAS_POLICY"] = {
                 "user_root": "user",
-                "assistant_root": "andrew",
-                "user_aliases": ["我", "用户", "user", "主人", "master"],
-                "assistant_aliases": ["你", "您", "助理", "管家", "andrew", "assistant", "ping", "AI助手"],
+                "assistant_root": "assistant",
+                "user_aliases": ["我", "用户", "user"],
+                "assistant_aliases": ["你", "您", "助理", "assistant", "AI助手"],
                 "prohibition": "严禁将用户(user)混淆为助手名, 严禁生成代词孤立点"
             }
             

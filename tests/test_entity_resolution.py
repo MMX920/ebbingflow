@@ -15,7 +15,7 @@ class TestEntityResolution(unittest.TestCase):
         self.asst_root = identity_config.assistant_id
         self.ctx = {
             "user_real_name": "张志强",
-            "assistant_real_name": "Andrew"
+            "assistant_real_name": "AssistantName"
         }
 
     def test_root_id_match(self):
@@ -34,7 +34,7 @@ class TestEntityResolution(unittest.TestCase):
         self.assertEqual(res_user.reason, "alias")
         
         # 助手别名
-        res_asst = self.resolver.resolve("Andrew", "user_001", self.ctx)
+        res_asst = self.resolver.resolve("AssistantName", "user_001", self.ctx)
         self.assertEqual(res_asst.resolved_root_id, self.asst_root)
 
     def test_canonical_match(self):

@@ -13,7 +13,7 @@ class _DummyRequest:
 
 class _FakeSession:
     user_id = "user_001"
-    session_id = "master_session"
+    session_id = "session_user_001"
 
 
 class _FakeEngine:

@@ -35,7 +35,7 @@ from memory.event.temporal import resolve as _resolve_temporal_anchor
 from memory.identity.canonical import canonicalize_entity
 from memory.integration.cdc_outbox import outbox
 
-FORBIDDEN_NAMES = {"AI", "Andrew", "Hong", "assistant", "system"}
+FORBIDDEN_NAMES = {"AI", "assistant", "system"}
 
 def _looks_like_real_person_name(value: str) -> bool:
     candidate = (value or "").strip()
@@ -306,7 +306,7 @@ class AsyncGraphWriter:
         ):
             return {"entity_id": owner_id, "owner_id": owner_id}, user_real or identity_config.default_user_name
         if (
-            can_norm in ["andrew", identity_config.assistant_id]
+            can_norm in ["assistant", identity_config.assistant_id]
             or (asst_norm and can_norm == asst_norm)
             or (not is_explicit_external_name and _matches_alias_pool(canonical_name, assistant_aliases))
         ):

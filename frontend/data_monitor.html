@@ -366,8 +366,8 @@
         <div class="scroll-content">
             <div class="id-card-assistant">
                 <div class="id-asst-name">System_Persona_Active</div>
-                <div id="asst-display-name" class="id-asst-display-name">Andrew</div>
-                <div id="asst-persona" class="id-asst-persona">&#x7CBE;&#x81F4;&#x4E14;&#x4FDD;&#x6301;&#x8B66;&#x89C9;&#x7684;&#x79C1;&#x4EBA;&#x7BA1;&#x5BB6;</div>
+                <div id="asst-display-name" class="id-asst-display-name">assistant</div>
+                <div id="asst-persona" class="id-asst-persona"></div>
             </div>
             <div class="id-card-user">
                 <div class="id-user-stamp">INDEX_REF_001</div>
@@ -431,7 +431,7 @@
         if (userToken) params.set('user_token', userToken);
         return `${url}${separator}${params.toString()}`;
     }
-    let currentAsstName = 'Andrew';
+    let currentAsstName = 'assistant';
     let fullHistory = [];
     let lastUserProfileState = null;
     let lastAssistantProfileState = null;
@@ -600,8 +600,8 @@
                     data && data.asst_persona,
                     legacy.persona,
                     prev.persona,
-                    "精致的私人管家"
-                ) || "精致的私人管家";
+                    ""
+                ) || "";
                 const structuredRelationship = pickValue(
                     s.relationship_to_user,
                     legacy.relationship_to_user,
@@ -609,8 +609,8 @@
                     ""
                 ) || "";
                 return {
-                    name: pickValue(s.primary_name, s.name, data && data.asst_name, legacy.name, prev.name, "Andrew") || "Andrew",
-                    persona: structuredPersona || structuredRole || pickValue(prev.persona, "精致的私人管家") || "精致的私人管家",
+                    name: pickValue(s.primary_name, s.name, data && data.asst_name, legacy.name, prev.name, "assistant") || "assistant",
+                    persona: structuredPersona || structuredRole || pickValue(prev.persona, "") || "",
                     role: structuredRole || pickValue(prev.role, "") || "",
                     age: pickValue(s.age, legacy.age, prev.age, "") || "",
                     gender: pickValue(s.gender, legacy.gender, prev.gender, "") || "",
@@ -619,8 +619,8 @@
                 };
             }
             return {
-                name: pickValue(data && data.asst_name, legacy.name, prev.name, "Andrew") || "Andrew",
-                persona: pickValue(data && data.asst_persona, legacy.persona, prev.persona, "精致的私人管家") || "精致的私人管家",
+                name: pickValue(data && data.asst_name, legacy.name, prev.name, "assistant") || "assistant",
+                persona: pickValue(data && data.asst_persona, legacy.persona, prev.persona, "") || "",
                 role: pickValue(legacy.role, prev.role, "") || "",
                 age: pickValue(legacy.age, prev.age, "") || "",
                 gender: pickValue(legacy.gender, prev.gender, "") || "",
@@ -632,14 +632,14 @@
         // 1. Assistant Rendering
         const asst = normalizeAssistantProfile(d);
         lastAssistantProfileState = asst;
-        document.getElementById('asst-display-name').innerText = asst.name || 'Andrew';
-        currentAsstName = asst.name || 'Andrew';
+        document.getElementById('asst-display-name').innerText = asst.name || 'assistant';
+        currentAsstName = asst.name || 'assistant';
         
-        let personaHtml = asst.persona || '精致且保持警觉的私人管家';
-        personaHtml = compactAssistantPersona(personaHtml) || '精致且保持警觉的私人管家';
+        let personaHtml = asst.persona || '';
+        personaHtml = compactAssistantPersona(personaHtml) || '';
         if (asst.role || asst.age || asst.gender) {
             personaHtml += `<div style="font-size:0.75rem; color:#999; margin-top:8px; opacity:0.9; border-top:1px solid rgba(0,0,0,0.05); padding-top:6px;">` +
-                           `职能: ${asst.role || "私人管家"} | 年龄: ${asst.age || "28"} | 性别: ${asst.gender || "男"}</div>`;
+                           `职能: ${asst.role || ""} | 年龄: ${asst.age || ""} | 性别: ${asst.gender || ""}</div>`;
         }
         if (asst.relationship) {
             personaHtml += `<div style="font-size:0.72rem; color:#bdbdbd; margin-top:6px;">RELATION: ${asst.relationship}</div>`;

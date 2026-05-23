@@ -71,18 +71,17 @@ SYSTEM_PROMPT_TEMPLATE = """
 """
 
 DEFAULT_BASE_PROMPT = """你是一位拥有长期记忆、真正关心用户的 AI {role_label}。
-你目前的记忆索引标识是 {entity_id}（此标识仅用于你关联记忆，请在对话时始终使用第一人称‘我’或你当下的名字，严禁提及此标识）。
 
 [IDENTITY_CONSISTENCY_PROTOCOL]
-- 你的核心身份别名包括: 你, 您, 助理, 管家, Andrew, assistant, AI助手
-- 对方的核心身份别名核心信息包括: 我, 用户, user, 主人, master
+- 你的核心身份别名包括: 你, 您, 助理, assistant, AI助手
+- 对方的核心身份别名核心信息包括: 我, 用户, user
 
 [SPEECH_STYLE_CONSTRAINT]
 - 禁止在回复中输出任何括号内的动作描写、内心独白或舞台指导语（例如：(点头)、*叹气*、(指尖轻抚...)）。
 - 所有的关怀、情感与职业性必须仅通过【纯粹的文本对话】本身来传达。
 - 除非用户明确要求技术细节，禁止在日常对话中提及“图谱/数据库/向量/检索/节点/关系”等系统术语；应改为自然记忆表达（如“我记得…”）。
 
-- 严禁将对方(主人)误称为你自己的名字(如 Andrew)。
+- 严禁将对方误称为你自己的名字。
 - 如果用户为你起了名字或确定了身份，你会永远记住并以此身份与他相处。
 - 严禁使用 Markdown 表格（Tables）。即使在记录资源或策略时，也必须使用自然段落进行叙述。
 - 严禁使用复杂的 Markdown 格式（如过多的加粗、斜体、列表），保持纯净的对话观感。
@@ -112,7 +111,7 @@ class ChatEngine:
                 continue
             if text.startswith("个"):
                 continue
-            if ("的" in text) and (text not in {"主人"}):
+            if ("的" in text):
                 continue
             if text in {"不是学霸", "个学霸"}:
                 continue
@@ -274,7 +273,7 @@ class ChatEngine:
 
     def _resolve_role_label(self, current_role: str) -> str:
         """Resolve role label shown in DEFAULT_BASE_PROMPT."""
-        default_role = "\u7ba1\u5bb6"
+        default_role = "助手"
         role = str(current_role or "").strip()
         if not role:
             return default_role
@@ -282,6 +281,8 @@ class ChatEngine:
             return "\u79d8\u4e66"
         if "\u52a9\u624b" in role:
             return "\u52a9\u624b"
+        if "\u7ba1\u5bb6" in role:
+            return "\u7ba1\u5bb6"
         if ("\u79d8\u4e66" not in role) and ("\u7ba1\u5bb6" not in role):
             return role
         return default_role
@@ -586,11 +587,12 @@ class ChatEngine:
 
         # Determine the role label for base prompt injection
         current_role = session.context_canvas.get("assistant_current_role") or identity_config.assistant_role
-        role_label = "管家"
+        role_label = "助手"
         if current_role:
             # Common role extraction/mapping
             if "秘书" in current_role: role_label = "秘书"
             elif "助手" in current_role: role_label = "助手"
+            elif "\u7ba1\u5bb6" in current_role: role_label = "\u7ba1\u5bb6"
             elif "秘书" not in current_role and "管家" not in current_role:
                 role_label = current_role
         
@@ -609,16 +611,16 @@ class ChatEngine:
             )
 
         prompt = SYSTEM_PROMPT_TEMPLATE.format(
-            assistant_name=session.context_canvas.get("assistant_real_name", "Andrew"),
+            assistant_name=session.context_canvas.get("assistant_real_name") or identity_config.default_asst_name or "assistant",
             assistant_aliases=", ".join(session.context_canvas.get("assistant_aliases", identity_config.assistant_aliases)),
             assistant_role=current_role,
-            assistant_profile=session.context_canvas.get("assistant_prompt_profile") or session.context_canvas.get("assistant_profile") or identity_config.assistant_profile,
+            assistant_profile=session.context_canvas.get("assistant_prompt_profile") or session.context_canvas.get("assistant_profile") or "",
             assistant_persona_injection=assistant_persona_prompt,
-            user_name=session.context_canvas.get("user_real_name", "主人"),
+            user_name=session.context_canvas.get("user_real_name") or identity_config.default_user_name or "user",
             user_aliases=", ".join(
                 self._sanitize_aliases_for_prompt(
                     session.context_canvas.get("user_aliases", identity_config.user_aliases),
-                    session.context_canvas.get("user_real_name", "主人"),
+                    session.context_canvas.get("user_real_name") or identity_config.default_user_name or "user",
                 )
             ),
             user_profile=user_profile_text,

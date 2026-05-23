@@ -45,15 +45,15 @@ def _bootstrap_events_db(db_path: str):
     """)
     rows = [
         # owner=alice, two acquisition deliveries of horses on different days
-        ("e1", "alice", "RESOURCE", "acquisition", "2026-04-15T10:00", "andrew", "delivers", "马匹",  500, "匹"),
-        ("e2", "alice", "RESOURCE", "acquisition", "2026-04-26T11:00", "andrew", "delivers", "马匹",  120, "匹"),
+        ("e1", "alice", "RESOURCE", "acquisition", "2026-04-15T10:00", "assistant", "delivers", "马匹",  500, "匹"),
+        ("e2", "alice", "RESOURCE", "acquisition", "2026-04-26T11:00", "assistant", "delivers", "马匹",  120, "匹"),
         # weapons
-        ("e3", "alice", "RESOURCE", "acquisition", "2026-04-15T10:00", "andrew", "delivers", "军械", 1200, "件"),
-        ("e4", "alice", "RESOURCE", "acquisition", "2026-04-30T09:00", "andrew", "delivers", "军械",  300, "件"),
+        ("e3", "alice", "RESOURCE", "acquisition", "2026-04-15T10:00", "assistant", "delivers", "军械", 1200, "件"),
+        ("e4", "alice", "RESOURCE", "acquisition", "2026-04-30T09:00", "assistant", "delivers", "军械",  300, "件"),
         # Some grain (different unit)
-        ("e5", "alice", "RESOURCE", "acquisition", "2026-04-22T08:00", "andrew", "stocks",   "粮草",   80, "石"),
+        ("e5", "alice", "RESOURCE", "acquisition", "2026-04-22T08:00", "assistant", "stocks",   "粮草",   80, "石"),
         # A loss/expenditure row should subtract from the inventory total
-        ("e5_loss", "alice", "RESOURCE", "loss", "2026-04-23T08:00", "andrew", "损耗", "粮草", 30, "石"),
+        ("e5_loss", "alice", "RESOURCE", "loss", "2026-04-23T08:00", "assistant", "损耗", "粮草", 30, "石"),
         # An untyped quantitative event — extractor mis-tagged it as PROPERTY
         ("e6", "alice", "PROPERTY", "stocktake",   "2026-04-29T08:00", "alice",  "holds",   "弓箭",  240, "把"),
         # bob's data should not leak into alice's totals

@@ -279,7 +279,7 @@ async def _initialize_runtime_after_restore():
         history_repo = ChromaHistoryRepository()
 
     session = ChatSession(
-        session_id="master_session",
+        session_id=f"session_{identity_config.user_id}",
         user_id=identity_config.user_id,
         history_repo=history_repo,
     )
@@ -735,7 +735,7 @@ async def lifespan(app: FastAPI):
         history_repo = ChromaHistoryRepository()
         print(f"[Bootstrap] Using Chroma History Backend (Legacy/RAG Only)")
 
-    session = ChatSession(session_id="master_session", user_id=identity_config.user_id, history_repo=history_repo)
+    session = ChatSession(session_id=f"session_{identity_config.user_id}", user_id=identity_config.user_id, history_repo=history_repo)
     history_repo_global = history_repo
     user_sessions[session.user_id] = session
     await session.restore_from_repo()
@@ -756,31 +756,6 @@ async def lifespan(app: FastAPI):
         await p_manager.close()
     except Exception as ge:
         logger.error(f"[GENESIS_ERROR] bootstrap_genesis_identities failed: {ge}")
-
-    if len(session.history) == 0:
-        asst_name = identity_config.default_asst_name
-        try:
-            async with global_db_driver.session(database=neo4j_config.database) as db_session:
-                res = await db_session.run(
-                    "MATCH (a:Entity {entity_id: $aid, owner_id: $uid}) RETURN a.name AS name",
-                    aid=identity_config.assistant_id,
-                    uid=session.user_id
-                )
-                record = await res.single()
-                if record and record["name"]:
-                    session.identity_state = reduce_identity_state(session.identity_state, {
-                        "asst_name": record["name"],
-                        "source": "default"
-                    })
-                    asst_name = session.identity_state.get("asst_name")
-                    welcome_msg = f"Hello, I am {asst_name}. Nice to see you again."
-                else:
-                    asst_name = identity_config.default_asst_name
-                    welcome_msg = f"Hello, I am {asst_name}. The system is online. How should I address you?"
-        except Exception as se:
-            logger.debug(f"Welcome message name fetch failed, fallback default: {se}")
-            welcome_msg = f"Hello, I am {asst_name}. The system is online. How should I address you?"
-        session.add_assistant_message(welcome_msg)
 
     from config import embed_config
     try:
@@ -809,7 +784,7 @@ async def lifespan(app: FastAPI):
         os.environ["EBBINGFLOW_BROWSER_POPPED"] = "1"
 
     print("\n" + "="*50)
-    print("ALL SYSTEMS GO! You can access Andrew here:")
+    print("ALL SYSTEMS GO! You can access the app here:")
     print("Interaction Hub:  http://localhost:8000")
     print("Data Monitor:    http://localhost:8000/monitor")
     print("="*50 + "\n")
@@ -1393,8 +1368,8 @@ async def websocket_endpoint(websocket: WebSocket):
                 obs_facts = []
 
             user_name = prof_record['u_name'] if (prof_record and prof_record['u_name']) else 'User'
-            asst_name = prof_record['a_name'] if (prof_record and prof_record['a_name']) else "Andrew"
-            asst_persona = prof_record['a_persona'] if (prof_record and prof_record['a_persona']) else 'A calm and reliable assistant'
+            asst_name = prof_record['a_name'] if (prof_record and prof_record['a_name']) else (identity_config.default_asst_name or "assistant")
+            asst_persona = prof_record['a_persona'] if (prof_record and prof_record['a_persona']) else ''
             user_profile_str = ""
             user_profile_struct = {}
             assistant_profile_struct = {}

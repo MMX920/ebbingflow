@@ -23,8 +23,8 @@ class EntityResolver:
     def __init__(self, similarity_threshold: float = 0.92):
         self.similarity_threshold = similarity_threshold
         # 核心根域定义
-        self.user_root = identity_config.user_id # user_001
-        self.asst_root = identity_config.assistant_id # assistant_001
+        self.user_root = identity_config.user_id
+        self.asst_root = identity_config.assistant_id
 
     def resolve(self, name: str, owner_id: str, session_ctx: Dict[str, Any] = None) -> ResolutionResult:
         """执行多级消歧检索"""
@@ -42,10 +42,10 @@ class EntityResolver:
 
         # 2. Alias 别名命中 (来自 Session 上下文或配置)
         # 这里的别名通常在 MemoryRetriever 中已同步到 context_canvas
-        user_aliases = ["我", "主人", "机主", "管理员", "用户"]
+        user_aliases = ["我", "用户"]
         if ctx.get("user_real_name"): user_aliases.append(ctx["user_real_name"])
         
-        asst_aliases = ["助手", "Andrew", "Hong", "你", "您", "AI", "管家"]
+        asst_aliases = ["助手", "你", "您", "AI", "assistant"]
         if ctx.get("assistant_real_name"): asst_aliases.append(ctx["assistant_real_name"])
 
         if n in user_aliases:
@@ -59,7 +59,7 @@ class EntityResolver:
             cn = canonicalize_entity(n)
             if cn == "user":
                 return ResolutionResult(self.user_root, ctx.get("user_real_name") or "User", 0.90, "canonical")
-            if cn == "andrew":
+            if cn == "assistant":
                 return ResolutionResult(self.asst_root, ctx.get("assistant_real_name") or "Assistant", 0.90, "canonical")
         except Exception as exc:
             logger.debug("[EntityResolver] canonicalize failed for '%s': %s", n, exc)

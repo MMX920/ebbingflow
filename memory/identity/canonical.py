@@ -6,23 +6,18 @@
 
 CANONICAL_MAP = {
     # 助手侧归一化
-    "你": "andrew",
-    "您": "andrew",
-    "助手": "andrew",
-    "助理": "andrew",
-    "管家": "andrew",
-    "ai": "andrew",
-    "assistant": "andrew",
-    "andrew": "andrew",
-    "ping": "andrew",
-    "机器人": "andrew",
+    "你": "assistant",
+    "您": "assistant",
+    "助手": "assistant",
+    "助理": "assistant",
+    "ai": "assistant",
+    "assistant": "assistant",
+    "机器人": "assistant",
     
     # 用户侧归一化
     "我": "user",
-    "主人": "user",
     "用户": "user",
-    "user": "user",
-    "master": "user"
+    "user": "user"
 }
 
 # 严禁进入图谱的噪音词

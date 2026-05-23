@@ -25,9 +25,9 @@ async def test_reasoning():
     print("Case 1: R4 Symmetry Pass")
 
     # CASE 2: R3 可逆推演 (SERVES -> OWNS)
-    rels2 = [{"from": "Andrew", "type": "SERVES", "to": "Master", "from_id": "asst_001", "to_id": "user_001"}]
+    rels2 = [{"from": "Assistant", "type": "SERVES", "to": "User", "from_id": "asst_001", "to_id": "user_001"}]
     inf2 = await reasoner.reason(rels2, "user_001")
-    assert any(i["type"] == "OWNS" and i["from"] == "Master" and i["inference_rule"] == "R3" for i in inf2)
+    assert any(i["type"] == "OWNS" and i["from"] == "User" and i["inference_rule"] == "R3" for i in inf2)
     print("Case 2: R3 Inversion Pass")
 
     # CASE 3: R1 传递性 (SAME_AS)

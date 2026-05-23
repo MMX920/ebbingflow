@@ -20,7 +20,7 @@ from memory.integration.cdc_outbox import outbox
 import uuid
 logger = logging.getLogger(__name__)
 
-FORBIDDEN_NAMES = {"女的", "男的", "女仆", "管家", "助手", "AI", "Andrew", "Owner", "系统", "机主", "管理员"}
+FORBIDDEN_NAMES = {"女的", "男的", "女仆", "助手", "AI", "Owner", "系统", "机主", "管理员"}
 
 C_GREEN = "\033[32m"
 C_YELLOW = "\033[33m"
@@ -124,7 +124,7 @@ class IdentityEvolutionManager:
 
     def _is_user_alias(self, name: str, actor: Actor) -> bool:
         """判断是否为当前用户的别名"""
-        aliases = {actor.speaker_name, "用户", "主人", "我", identity_config.user_id}
+        aliases = {actor.speaker_name, "用户", "我", identity_config.user_id}
         return (name or "").strip() in aliases
 
     def _is_asst_alias(self, name: str, actor: Actor) -> bool:
@@ -133,7 +133,7 @@ class IdentityEvolutionManager:
         if not candidate:
             return False
 
-        aliases = [actor.target_name, "AI", "AI助手", "助手", "Andrew", identity_config.assistant_id, "你"]
+        aliases = [actor.target_name, "AI", "AI助手", "助手", "assistant", identity_config.assistant_id, "你"]
         if candidate in aliases:
             return True
 
@@ -152,7 +152,7 @@ class IdentityEvolutionManager:
         semantic_keywords = ["改名", "更改", "修改", "命名", "改成", "叫做", "起名", "取名", "名字", "rename", "name"]
         semantic_text = " ".join(filter(None, [event.subject, event.predicate, event.object, event.context]))
         is_rename_semantic = any(k in semantic_text for k in semantic_keywords) if semantic_text else False
-        assistant_markers = ["AI助手", "助手", "assistant", "Andrew", identity_config.assistant_id]
+        assistant_markers = ["AI助手", "助手", "assistant", identity_config.assistant_id]
         semantic_lower = semantic_text.lower() if semantic_text else ""
         target_is_asst = (
             self._is_asst_alias(event.object, actor)
@@ -230,7 +230,7 @@ class IdentityEvolutionManager:
     def _extract_user_name_from_event(self, event: MemoryEvent, actor: Actor) -> str | None:
         semantic_text = " ".join(filter(None, [event.subject, event.predicate, event.object, event.context]))
         if not semantic_text: return None
-        assistant_markers = ["AI助手", "助手", "assistant", "Andrew", identity_config.assistant_id]
+        assistant_markers = ["AI助手", "助手", "assistant", identity_config.assistant_id]
         semantic_lower = semantic_text.lower()
         if any(m.lower() in semantic_lower for m in assistant_markers if m): return None
         user_semantic_keywords = ["我叫", "我是", "my name is", "i am"]
@@ -241,7 +241,7 @@ class IdentityEvolutionManager:
             for raw in [event.subject, event.object]:
                 text = (raw or "").strip()
                 if not text or self._is_user_alias(text, actor) or self._is_asst_alias(text, actor): continue
-                if text in {"用户", "主人", "我", "自己", "系统"}: continue
+                if text in {"用户", "我", "自己", "系统"}: continue
                 candidate = text; break
         if not candidate: return None
         candidate = candidate.strip()

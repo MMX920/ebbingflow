@@ -107,15 +107,17 @@ class KnowledgeBaseEngine:
             uid = getattr(session, "user_id", None) or identity_config.user_id
             async with self._driver.session(database=self.database) as db_session:
                 res = await db_session.run(
-                    "MATCH (e:Entity {owner_id: $uid}) WHERE e.entity_id IN ['assistant_001', 'user_001'] RETURN e.entity_id AS id, COALESCE(e.primary_name, e.name) AS name, COALESCE(e.aliases, []) AS aliases",
-                    uid=uid
+                    "MATCH (e:Entity {owner_id: $uid}) WHERE e.entity_id IN [$aid, $user_root] RETURN e.entity_id AS id, COALESCE(e.primary_name, e.name) AS name, COALESCE(e.aliases, []) AS aliases",
+                    uid=uid,
+                    aid=identity_config.assistant_id,
+                    user_root=identity_config.user_id,
                 )
                 data = await res.data()
                 for item in data:
-                    if item['id'] == 'assistant_001' and item['name']:
+                    if item['id'] == identity_config.assistant_id and item['name']:
                         session.context_canvas["assistant_real_name"] = item['name']
                         session.context_canvas["assistant_aliases"] = list(item.get("aliases") or [])
-                    if item['id'] == 'user_001' and item['name']:
+                    if item['id'] == identity_config.user_id and item['name']:
                         session.context_canvas["user_real_name"] = item['name']
                         session.context_canvas["user_aliases"] = list(item.get("aliases") or [])
         except Exception as exc:

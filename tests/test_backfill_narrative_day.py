@@ -71,7 +71,7 @@ def _bootstrap(db_path: str):
     rows = [
         # alice: msg 1 mentions day 36, msg 2 has no day, msg 3 day 47
         (1, "s1", "user", "user",      "第36天运回多少物资？"),
-        (2, "s1", "assistant", "Andrew", "马匹五百匹，军械一千二百件。"),
+        (2, "s1", "assistant", "assistant", "马匹五百匹，军械一千二百件。"),
         (3, "s1", "user", "user",      "今天第 47 天，赵云击溃多少人？"),
         # bob: day 9 — must NOT cross into alice
         (4, "s2", "user", "user",      "day 9 — recap please"),
@@ -85,7 +85,7 @@ def _bootstrap(db_path: str):
     conn.execute(
         "INSERT INTO ef_memory_events "
         "(event_id, owner_id, main_type, subject, predicate, object, quantity, quantity_unit, source_msg_id, metadata) "
-        "VALUES ('ev_a', 'alice', 'RESOURCE', 'andrew', 'delivers', '马匹', 500, '匹', 1, '{}')"
+        "VALUES ('ev_a', 'alice', 'RESOURCE', 'assistant', 'delivers', '马匹', 500, '匹', 1, '{}')"
     )
     # event linked DIRECTLY via msg 3 (alice, day 47), already has unrelated metadata
     conn.execute(
@@ -98,7 +98,7 @@ def _bootstrap(db_path: str):
     conn.execute(
         "INSERT INTO ef_memory_events "
         "(event_id, owner_id, main_type, subject, predicate, object, source_msg_id, metadata) "
-        "VALUES ('ev_c', 'alice', 'PROPERTY', 'andrew', 'delivers', '军械', null, '{}')"
+        "VALUES ('ev_c', 'alice', 'PROPERTY', 'assistant', 'delivers', '军械', null, '{}')"
     )
     conn.execute(
         "INSERT INTO ef_event_evidence_links (event_uuid, message_id) VALUES ('ev_c', 1)"

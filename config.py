@@ -127,17 +127,17 @@ sqlite_config = SqliteConfig()
 
 class IdentityConfig:
     def __init__(self):
-        self.user_id = os.getenv("MASTER_USER_ID", "user_001")
-        self.assistant_id = os.getenv("MASTER_ASSISTANT_ID", "assistant_001")
-        # 默认文案预设
-        self.default_user_name = "主人"
-        self.default_asst_name = "Andrew"
-        self.default_asst_persona = "精致且保持警觉的私人管家"
-        # 兼容字段（供不同版本的 prompt 组装器使用）
-        self.user_aliases = os.getenv("USER_ALIASES", "无")
-        self.assistant_aliases = os.getenv("ASSISTANT_ALIASES", "无")
-        self.assistant_role = os.getenv("ASSISTANT_ROLE", "全能管家")
-        self.assistant_profile = os.getenv("ASSISTANT_PROFILE", self.default_asst_persona)
+        self.user_id = os.getenv("EBBINGFLOW_USER_ID", "user_001")
+        self.assistant_id = os.getenv("EBBINGFLOW_ASSISTANT_ID", "assistant_001")
+        # Identity display fields should come from persisted identity facts, not code seeds.
+        self.default_user_name = "user"
+        self.default_asst_name = ""
+        self.default_asst_persona = ""
+        # Compatibility fields for prompt builders.
+        self.user_aliases = os.getenv("USER_ALIASES", "")
+        self.assistant_aliases = os.getenv("ASSISTANT_ALIASES", "")
+        self.assistant_role = os.getenv("ASSISTANT_ROLE", "")
+        self.assistant_profile = os.getenv("ASSISTANT_PROFILE", "")
         # --- SQL History & Evidence Chain (Phase-M1) ---
         self.chat_history_backend = os.getenv("CHAT_HISTORY_BACKEND", "sql").lower()
         self.evidence_injection_enabled = os.getenv("EVIDENCE_INJECTION_ENABLED", "true").lower() == "true"

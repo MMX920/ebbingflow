@@ -96,13 +96,13 @@ NOISE_TEXT_HINTS_WEAK = (
 def _normalize_relationship_to_user(value: str, role_hint: str = "") -> str:
     raw = str(value or "").strip().lower()
     if not raw:
-        return "assistant_to_user" if role_hint else ""
+        return ""
     # Backward-compat: legacy values like user_assistant / user_私人助理.
     if raw.startswith("user_") or raw in {"userassistant", "user_assistant"}:
         return "assistant_to_user"
     if raw in {"assistant_to_user", "assistant-user", "assistanttouser"}:
         return "assistant_to_user"
-    return "assistant_to_user"
+    return raw
 
 
 def _node_primary_name(node, fallback: str = "") -> str:
@@ -975,8 +975,8 @@ class PersonaManager:
             return
 
         user_id = session.user_id
-        user_ids = {"user", "user_001", identity_config.user_id}
-        asst_ids = {"assistant", "assistant_001", "andrew", identity_config.assistant_id}
+        user_ids = {"user", identity_config.user_id}
+        asst_ids = {"assistant", identity_config.assistant_id}
         user_aliases = {
             self._canonicalize(str(x or ""))
             for x in [
@@ -992,7 +992,7 @@ class PersonaManager:
             for x in [
                 session.context_canvas.get("assistant_real_name"),
                 *(session.context_canvas.get("assistant_aliases") or []),
-                "andrew",
+                "assistant",
                 identity_config.assistant_id,
             ]
             if str(x or "").strip()
@@ -1008,7 +1008,7 @@ class PersonaManager:
                     or target_type in user_aliases
                 )
                 is_assistant = (
-                    target_type == "andrew"
+                    target_type == "assistant"
                     or raw_target in asst_ids
                     or target_type in asst_aliases
                 )
@@ -1229,17 +1229,17 @@ class PersonaManager:
             record = await res.single()
             if not record:
                 return {
-                    "name": identity_config.default_asst_name,
-                    "primary_name": identity_config.default_asst_name,
-                    "persona": identity_config.default_asst_persona,
-                    "role": "assistant",
-                    "age": "28",
-                    "gender": "male",
-                    "relationship_to_user": "assistant_to_user",
-                    "aliases": [identity_config.default_asst_name],
-                    "state": "Active",
+                    "name": "",
+                    "primary_name": "",
+                    "persona": "",
+                    "role": "",
+                    "age": "",
+                    "gender": "",
+                    "relationship_to_user": "",
+                    "aliases": [],
+                    "state": "",
                     "values": [],
-                    "bio": identity_config.default_asst_persona,
+                    "bio": "",
                     "mbti_label": "",
                     "big_five": {},
                     "efstb": {},
@@ -1283,6 +1283,9 @@ class PersonaManager:
 
     async def bootstrap_genesis_identities(self, user_id: str):
         now = datetime.now().isoformat()
+        genesis_asst_name = "Andrew"
+        genesis_asst_role = "私人管家"
+        genesis_asst_persona = "精致且保持警觉的私人管家"
         async with self._driver.session(database=self.database) as session:
             await session.run(
                 """
@@ -1311,28 +1314,29 @@ class PersonaManager:
                     a.aliases = [$aname],
                     a.persona = $asum,
                     a.personality_summary = $asum,
-                    a.role = 'assistant',
-                    a.current_role = 'assistant',
+                    a.role = $arole,
+                    a.current_role = $arole,
                     a.relationship_to_user = 'assistant_to_user',
-                    a.age = '28',
-                    a.gender = 'male',
+                    a.age = '',
+                    a.gender = '',
                     a.current_state = 'Active',
                     a.persona_updated_at = $now
                 ON MATCH SET a.owner_id = $uid
                 """,
                 aid=aid,
                 uid=user_id,
-                aname=identity_config.default_asst_name,
-                asum=identity_config.default_asst_persona,
+                aname=genesis_asst_name,
+                arole=genesis_asst_role,
+                asum=genesis_asst_persona,
                 now=now,
             )
             await session.run(
                 """
                 MATCH (u:Entity {entity_id: $uid, owner_id: $uid}), (a:Entity {entity_id: $aid, owner_id: $uid})
                 MERGE (a)-[r:RELATION {owner_id: $uid}]->(u)
-                ON CREATE SET r.type = 'loyal', r.created_at = $now
+                ON CREATE SET r.type = 'related', r.created_at = $now
                 MERGE (u)-[r2:RELATION {owner_id: $uid}]->(a)
-                ON CREATE SET r2.type = 'owns', r2.created_at = $now
+                ON CREATE SET r2.type = 'related', r2.created_at = $now
                 """,
                 uid=user_id,
                 aid=aid,

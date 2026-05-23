@@ -309,10 +309,8 @@ class MemoryRetrieverMiddleware(BaseMiddleware):
                     )
                     current_asst_name = session.identity_state.get("asst_name") or asst_data.get("name")
                     session.context_canvas["assistant_real_name"] = current_asst_name
-                    session.context_canvas["assistant_profile"] = (
-                        asst_data.get("profile") or identity_config.default_asst_persona
-                    )
-                    session.context_canvas["assistant_current_role"] = asst_data.get("role") or "全能助理"
+                    session.context_canvas["assistant_profile"] = asst_data.get("profile") or ""
+                    session.context_canvas["assistant_current_role"] = asst_data.get("role") or ""
 
             actor = getattr(session, "current_actor", None)
             if actor:
