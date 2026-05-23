@@ -1283,6 +1283,7 @@ class PersonaManager:
 
     async def bootstrap_genesis_identities(self, user_id: str):
         now = datetime.now().isoformat()
+        genesis_user_name = "主人"
         genesis_asst_name = "Andrew"
         genesis_asst_role = "私人管家"
         genesis_asst_persona = "精致且保持警觉的私人管家"
@@ -1293,7 +1294,7 @@ class PersonaManager:
                 ON CREATE SET
                     u.primary_name = $uname,
                     u.name = $uname,
-                    u.aliases = [$uname],
+                    u.aliases = [$uname, 'user'],
                     u.role = 'user',
                     u.age = 'unknown',
                     u.gender = 'unknown',
@@ -1301,7 +1302,7 @@ class PersonaManager:
                     u.persona_updated_at = $now
                 """,
                 uid=user_id,
-                uname="user",
+                uname=genesis_user_name,
                 now=now,
             )
             aid = identity_config.assistant_id
