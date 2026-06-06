@@ -1,0 +1,78 @@
+services:
+  app:
+    build:
+      context: .
+    image: ebbingflow:latest
+    container_name: ebbingflow-app
+    restart: unless-stopped
+    ports:
+      - "${SERVER_PORT:-8000}:8000"
+    environment:
+      SERVER_HOST: "0.0.0.0"
+      SERVER_PORT: "8000"
+      SERVER_RELOAD: "false"
+      EBBINGFLOW_BROWSER_POPPED: "1"
+
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-sk-your-key-here}"
+      OPENAI_BASE_URL: "${OPENAI_BASE_URL:-https://api.openai.com/v1}"
+      OPENAI_MODEL: "${OPENAI_MODEL:-gpt-3.5-turbo}"
+
+      EMBED_TYPE: "${EMBED_TYPE:-local}"
+      EMBED_MODEL: "${EMBED_MODEL:-paraphrase-multilingual-MiniLM-L12-v2}"
+      EMBED_BASE_URL: "${EMBED_BASE_URL:-http://host.docker.internal:11434/v1}"
+      EMBED_API_KEY: "${EMBED_API_KEY:-${OPENAI_API_KEY:-sk-no-key-required}}"
+
+      NEO4J_URI: "bolt://neo4j:7687"
+      NEO4J_USERNAME: "${NEO4J_USERNAME:-neo4j}"
+      NEO4J_PASSWORD: "${NEO4J_PASSWORD:-ebbingflow_password}"
+      NEO4J_DATABASE: "${NEO4J_DATABASE:-neo4j}"
+
+      SQLITE_DB_PATH: "/app/.data/ef_history.db"
+      CHAT_HISTORY_BACKEND: "${CHAT_HISTORY_BACKEND:-sql}"
+      WS_AUTH_REQUIRED: "${WS_AUTH_REQUIRED:-false}"
+      USER_TOKEN_SECRET: "${USER_TOKEN_SECRET:-change-me-before-production}"
+      USER_TOKEN_ALLOW_DEFAULT_NO_TOKEN: "${USER_TOKEN_ALLOW_DEFAULT_NO_TOKEN:-false}"
+
+      HF_HOME: "/cache/huggingface"
+      SENTENCE_TRANSFORMERS_HOME: "/cache/sentence-transformers"
+    volumes:
+      - ebbingflow_data:/app/.data
+      - ebbingflow_model_cache:/cache
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  neo4j:
+    image: neo4j:5-community
+    container_name: ebbingflow-neo4j
+    restart: unless-stopped
+    ports:
+      - "${NEO4J_HTTP_PORT:-7474}:7474"
+      - "${NEO4J_BOLT_PORT:-7687}:7687"
+    environment:
+      NEO4J_AUTH: "${NEO4J_USERNAME:-neo4j}/${NEO4J_PASSWORD:-ebbingflow_password}"
+      NEO4J_dbms_security_auth__minimum__password__length: "8"
+      NEO4J_server_memory_heap_initial__size: "${NEO4J_HEAP_INITIAL:-512m}"
+      NEO4J_server_memory_heap_max__size: "${NEO4J_HEAP_MAX:-1G}"
+      NEO4J_server_memory_pagecache_size: "${NEO4J_PAGECACHE:-512m}"
+    volumes:
+      - ebbingflow_neo4j_data:/data
+      - ebbingflow_neo4j_logs:/logs
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "cypher-shell -u ${NEO4J_USERNAME:-neo4j} -p ${NEO4J_PASSWORD:-ebbingflow_password} 'RETURN 1' >/dev/null 2>&1"
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+      start_period: 30s
+
+volumes:
+  ebbingflow_data:
+  ebbingflow_model_cache:
+  ebbingflow_neo4j_data:
+  ebbingflow_neo4j_logs:

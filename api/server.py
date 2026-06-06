@@ -813,6 +813,15 @@ app = FastAPI(lifespan=lifespan)
 active_connections: set[WebSocket] = set()
 
 
+@app.get("/health")
+async def health():
+    return {
+        "status": "ok",
+        "neo4j": global_db_driver is not None,
+        "history": history_repo_global is not None,
+    }
+
+
 class OpenAIChatMessage(BaseModel):
     model_config = ConfigDict(extra="allow")
 
@@ -2319,7 +2328,13 @@ async def get_monitor_stats(request: Request, user_id: str = None, user_token: s
         }
 
 if __name__ == "__main__":
-    uvicorn.run("api.server:app", host="0.0.0.0", port=8000, reload=True, reload_dirs=["api", "core", "memory", "bridge"])
+    uvicorn.run(
+        "api.server:app",
+        host=server_config.host,
+        port=server_config.port,
+        reload=server_config.reload,
+        reload_dirs=["api", "core", "memory", "bridge"] if server_config.reload else None,
+    )
 
 
 
