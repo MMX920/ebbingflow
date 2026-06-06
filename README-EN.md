@@ -74,6 +74,29 @@ EbbingFlow supports identity anchoring, alias normalization, and profiling based
 | **Python** | 3.10+ | Core backend runtime | `python --version` |
 | **Neo4j** | 4.4+ / 5.x | Graph DB support (Local or AuraDB Cloud) | Access `7474` or Cloud URI |
 
+### Docker One-Click Deployment
+
+Use Docker Compose to start the full stack, including EbbingFlow and Neo4j:
+
+```powershell
+.\deploy-docker.ps1
+```
+
+Linux/macOS:
+
+```bash
+chmod +x ./deploy-docker.sh
+./deploy-docker.sh
+```
+
+After startup:
+
+- Interaction Hub: http://localhost:8000
+- Data Monitor: http://localhost:8000/monitor
+- Neo4j Browser: http://localhost:7474
+
+See [Docker one-click deployment](./docs/docker-deploy.md) for configuration and operations.
+
 ### 1. Environment Preparation
 ```powershell
 # Create and install dependencies

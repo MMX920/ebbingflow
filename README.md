@@ -75,6 +75,29 @@ EbbingFlow 支持用户与助手的身份锚定、别名归一、Big Five 慢变
 | **Python** | 3.10+ | 核心后端运行环境 | `python --version` |
 | **Neo4j** | 4.4+ / 5.x | 图数据库支持（支持本地部署或 AuraDB 云端） | 访问 `7474` 或云端连接地址 |
 
+### Docker 一键部署
+
+推荐使用 Docker Compose 启动完整环境（包含 EbbingFlow 服务与 Neo4j）：
+
+```powershell
+.\deploy-docker.ps1
+```
+
+Linux/macOS:
+
+```bash
+chmod +x ./deploy-docker.sh
+./deploy-docker.sh
+```
+
+启动后访问：
+
+- Interaction Hub: http://localhost:8000
+- Data Monitor: http://localhost:8000/monitor
+- Neo4j Browser: http://localhost:7474
+
+详细配置与运维命令见 [Docker one-click deployment](./docs/docker-deploy.md)。
+
 ### 1. 环境准备
 ```powershell
 # 创建并安装依赖
