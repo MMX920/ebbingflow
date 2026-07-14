@@ -28,13 +28,12 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FRONTEND_DIR = os.path.join(BASE_DIR, "frontend")
 logger = logging.getLogger(__name__)
 
-from core.chat_engine import get_standard_engine
+from core.chat_engine import get_standard_engine, reset_standard_engine
 from core.session import ChatSession
 from config import server_config, neo4j_config, identity_config, memory_config, llm_config
 from memory.identity.state_reducer import reduce_identity_state
 from memory.identity.conflict_resolver import ConflictResolver, ConflictCandidate
 from memory.identity.manager import PersonaManager
-from memory.knowledge_engine import KnowledgeBaseEngine
 from memory.integration.cdc_checkpoint import CDCCheckpointManager
 from neo4j import AsyncGraphDatabase
 from bridge.llm import LLMBridge
@@ -110,9 +109,17 @@ async def _close_runtime_handles_for_restore():
     """Release in-process handles before replacing Windows-locked SQLite files."""
     global engine, session, global_db_driver, checkpoint_manager
 
+    old_engine = engine
     old_session = session
-    session = None
     engine = None
+    session = None
+
+    if old_engine is not None:
+        try:
+            await old_engine.close()
+        except Exception as exc:
+            logger.debug("[DemoRestore] engine close skipped: %s", exc)
+    reset_standard_engine()
 
     if old_session is not None:
         history_repo = getattr(old_session, "history_repo", None)
@@ -802,6 +809,10 @@ async def lifespan(app: FastAPI):
 
     yield
     print("EbbingFlow Brain Shutting Down")
+    if engine:
+        await engine.close()
+        reset_standard_engine()
+        engine = None
     if global_db_driver:
         await global_db_driver.close()
     if checkpoint_manager:
@@ -1829,7 +1840,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 "rag_all": processed_rag,
                 "retrieval_audit": ws_session.context_canvas.get("retrieval_audit") or {
                     "mode": "hybrid_baseline",
-                    "bm25_enabled": KnowledgeBaseEngine().is_bm25_enabled,
+                    "bm25_enabled": bool(getattr(memory_config, "enable_bm25", True)),
                     "sources": {"graph": 0, "episode": 0, "saga": 0, "vector": 0, "bm25": 0},
                     "result_count": 0
                 },

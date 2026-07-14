@@ -5,10 +5,11 @@ import time
 from datetime import datetime, timedelta
 from typing import AsyncGenerator, Callable, Awaitable, Optional, Any
 
-from config import llm_config, memory_config, identity_config
+from config import llm_config, memory_config, identity_config, neo4j_config
 from bridge.llm import LLMBridge
 from core.session import ChatSession, ChatMessage
 from core.middleware import MiddlewareChain
+from neo4j import AsyncGraphDatabase
 from memory.identity.manager import (
     PersonaManager,
     extract_assistant_role_rewrite,
@@ -95,9 +96,45 @@ class ChatEngine:
     def __init__(self):
         self.bridge = LLMBridge(llm_config, category="chat")
         self.middleware_chain = MiddlewareChain()
+        self._persona_manager = None
+        self._kb_driver = None
+        self._vector_storer = None
+
+    async def close(self):
+        await self.middleware_chain.close()
+        if self._persona_manager is not None:
+            await self._persona_manager.close()
+            self._persona_manager = None
+        if self._kb_driver is not None:
+            await self._kb_driver.close()
+            self._kb_driver = None
+        self._vector_storer = None
 
     def register_middleware(self, middleware):
         self.middleware_chain.add(middleware)
+
+    def _get_persona_manager(self) -> PersonaManager:
+        if self._persona_manager is None:
+            self._persona_manager = PersonaManager()
+        return self._persona_manager
+
+    def _get_kb_engine(self):
+        if self._kb_driver is None:
+            self._kb_driver = AsyncGraphDatabase.driver(
+                uri=neo4j_config.uri,
+                auth=(neo4j_config.username, neo4j_config.password),
+            )
+        if self._vector_storer is None:
+            from memory.vector.storer import VectorStorer
+
+            self._vector_storer = VectorStorer()
+
+        from memory.knowledge_engine import KnowledgeBaseEngine
+
+        return KnowledgeBaseEngine(
+            driver=self._kb_driver,
+            vector_storer=self._vector_storer,
+        )
 
     def _sanitize_aliases_for_prompt(self, aliases, primary_name: str = "") -> list:
         cleaned = []
@@ -381,30 +418,22 @@ class ChatEngine:
         session.context_canvas["user_profile_struct"] = profile
 
     async def _refresh_assistant_context(self, session: ChatSession) -> dict:
-        manager = None
         try:
-            manager = PersonaManager()
+            manager = self._get_persona_manager()
             profile = await manager.get_assistant_profile_struct(session.user_id)
         except Exception as exc:
             logger.warning("[ASSISTANT_CONTEXT] Failed to refresh assistant profile: %s", exc)
             profile = {}
-        finally:
-            if manager:
-                await manager.close()
         self._hydrate_assistant_context(session, profile)
         return profile
 
     async def _refresh_user_context(self, session: ChatSession) -> dict:
-        manager = None
         try:
-            manager = PersonaManager()
+            manager = self._get_persona_manager()
             profile = await manager.get_user_profile_struct(session.user_id)
         except Exception as exc:
             logger.warning("[USER_CONTEXT] Failed to refresh user profile: %s", exc)
             profile = {}
-        finally:
-            if manager:
-                await manager.close()
         self._hydrate_user_context(session, profile)
         return profile
 
@@ -412,18 +441,14 @@ class ChatEngine:
         updates = extract_assistant_role_rewrite(user_input)
         if not updates:
             return
-        manager = None
         try:
-            manager = PersonaManager()
+            manager = self._get_persona_manager()
             persisted = await manager.apply_assistant_role_rewrite(session.user_id, updates)
             profile = await manager.get_assistant_profile_struct(session.user_id)
         except Exception as exc:
             logger.warning("[ASSISTANT_ROLE_REWRITE] Failed to persist assistant role rewrite: %s", exc)
             persisted = {}
             profile = updates
-        finally:
-            if manager:
-                await manager.close()
         if persisted:
             logger.info("[ASSISTANT_ROLE_REWRITE] Applied assistant role-layer update: %s", persisted)
         self._hydrate_assistant_context(session, profile)
@@ -447,9 +472,8 @@ class ChatEngine:
                 session.context_canvas[f"user_{key}"] = value
 
         if updates:
-            manager = None
             try:
-                manager = PersonaManager()
+                manager = self._get_persona_manager()
                 persisted = await manager.apply_user_profile_rewrite(session.user_id, updates)
                 if persisted.get("name"):
                     session.context_canvas["user_real_name"] = persisted["name"]
@@ -463,9 +487,6 @@ class ChatEngine:
                     logger.info("[USER_PROFILE_REWRITE] Applied user root update: %s", persisted)
             except Exception as exc:
                 logger.warning("[USER_PROFILE_REWRITE] Failed to persist user profile rewrite: %s", exc)
-            finally:
-                if manager:
-                    await manager.close()
 
         external_names = extract_external_entity_names(user_input)
         if external_names:
@@ -539,8 +560,7 @@ class ChatEngine:
         user_input_refined = await self.middleware_chain.execute_request_phase(user_input, session)
         
         await _emit("03", "doing")
-        from memory.knowledge_engine import KnowledgeBaseEngine
-        kb_engine = KnowledgeBaseEngine()
+        kb_engine = self._get_kb_engine()
         await kb_engine.fetch_identities(session)
         await self._refresh_user_context(session)
         await self._refresh_assistant_context(session)
@@ -703,8 +723,6 @@ class ChatEngine:
             if step not in completed_response_steps:
                 await _emit(step, "done", time_ms=0)
 
-        await kb_engine.close()
-
 # 单例工厂
 _engine_instance = None
 def get_standard_engine() -> ChatEngine:
@@ -721,4 +739,9 @@ def get_standard_engine() -> ChatEngine:
         except Exception as e:
             logger.error(f"Middleware bootstrap failed: {e}")
     return _engine_instance
+
+
+def reset_standard_engine():
+    global _engine_instance
+    _engine_instance = None
 

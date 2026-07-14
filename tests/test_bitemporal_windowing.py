@@ -1,7 +1,7 @@
 import os
 import sys
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 # 将工程根目录加入 Python 路径
@@ -11,14 +11,26 @@ from memory.graph.writer import AsyncGraphWriter
 from memory.knowledge_engine import KnowledgeBaseEngine
 from memory.event.slots import MemoryEvent
 
-async def test_windowing():
+class FakeVectorStorer:
+    chat_collection = None
+    doc_collection = None
+
+async def test_windowing(monkeypatch):
+    import memory.knowledge_engine as ke
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 3, 20, 12, 0, tzinfo=timezone.utc)
+
+    monkeypatch.setattr(ke, "datetime", FixedDateTime)
     print("Running Bitemporal Windowing Tests...")
-    engine = KnowledgeBaseEngine()
+    engine = KnowledgeBaseEngine(vector_storer=FakeVectorStorer())
     
     # CASE 1: 昨天 命中昨天窗口
     q1 = "昨天我干了什么？"
     tw_start, tw_end, source = engine._infer_time_window(q1)
-    yesterday = (datetime.utcnow() - timedelta(days=1)).date().isoformat()
+    yesterday = "2026-03-19"
     assert yesterday in tw_start, f"Yesterday window start mismatch: {tw_start}"
     assert source == "nlp_inferred"
     print("Case 1: Yesterday NLP Inference Pass")
@@ -26,7 +38,7 @@ async def test_windowing():
     # CASE 2: 今天 只召回今日事件 (逻辑验证)
     q2 = "今天有什么计划？"
     tw_start, tw_end, source = engine._infer_time_window(q2)
-    today = datetime.utcnow().date().isoformat()
+    today = "2026-03-20"
     assert today in tw_start, f"Today window start mismatch: {tw_start}"
     print("Case 2: Today NLP Inference Pass")
 

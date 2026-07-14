@@ -484,15 +484,17 @@ def extract_external_entity_names(text: str) -> List[str]:
 
 
 class PersonaManager:
-    def __init__(self):
-        self._driver = AsyncGraphDatabase.driver(
+    def __init__(self, driver=None):
+        self._owns_driver = driver is None
+        self._driver = driver or AsyncGraphDatabase.driver(
             uri=neo4j_config.uri,
             auth=(neo4j_config.username, neo4j_config.password),
         )
         self.database = neo4j_config.database
 
     async def close(self):
-        await self._driver.close()
+        if self._owns_driver:
+            await self._driver.close()
 
     def _canonicalize(self, name: str) -> str:
         return canonicalize_entity(name)

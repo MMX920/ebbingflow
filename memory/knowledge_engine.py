@@ -31,12 +31,17 @@ _SHANGHAI_TZ = timezone(timedelta(hours=8))
 def _utc_z(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
+def _day_boundary_z(day, *, end: bool = False) -> str:
+    suffix = "23:59:59Z" if end else "00:00:00Z"
+    return f"{day.isoformat()}T{suffix}"
+
 class KnowledgeBaseEngine:
     """混合动力记忆引擎"""
     
-    def __init__(self, top_k: int = 5, window_cutoff: int = 6):
+    def __init__(self, top_k: int = 5, window_cutoff: int = 6, *, driver=None, vector_storer=None):
         # 初始化图谱驱动
-        self._driver = AsyncGraphDatabase.driver(
+        self._owns_driver = driver is None
+        self._driver = driver or AsyncGraphDatabase.driver(
             uri=neo4j_config.uri,
             auth=(neo4j_config.username, neo4j_config.password)
         )
@@ -44,7 +49,7 @@ class KnowledgeBaseEngine:
         
         # 初始化向量数据库客户端
         from .vector.storer import VectorStorer
-        self.v_storer = VectorStorer()
+        self.v_storer = vector_storer or VectorStorer()
         self.chat_collection = self.v_storer.chat_collection
         self.knowledge_collection = self.v_storer.doc_collection
         
@@ -56,7 +61,8 @@ class KnowledgeBaseEngine:
         self.last_latency = {"vector": 0, "graph": 0, "bm25": 0, "structured_events": 0, "plans": 0, "total": 0}
 
     async def close(self):
-        await self._driver.close()
+        if self._owns_driver:
+            await self._driver.close()
 
     @property
     def is_bm25_enabled(self) -> bool:
@@ -341,14 +347,10 @@ class KnowledgeBaseEngine:
         q = str(query or "").lower()
 
         def _day_window(day):
-            start = datetime.combine(day, datetime.min.time(), tzinfo=_SHANGHAI_TZ)
-            end = start + timedelta(days=1) - timedelta(seconds=1)
-            return _utc_z(start), _utc_z(end), "nlp_inferred"
+            return _day_boundary_z(day), _day_boundary_z(day, end=True), "nlp_inferred"
 
         def _range_window(start_day, end_day):
-            start = datetime.combine(start_day, datetime.min.time(), tzinfo=_SHANGHAI_TZ)
-            end = datetime.combine(end_day, datetime.min.time(), tzinfo=_SHANGHAI_TZ) + timedelta(days=1) - timedelta(seconds=1)
-            return _utc_z(start), _utc_z(end), "nlp_inferred"
+            return _day_boundary_z(start_day), _day_boundary_z(end_day, end=True), "nlp_inferred"
 
         if "今天" in q or "今日" in q or "刚刚" in q:
             return _day_window(now.date())

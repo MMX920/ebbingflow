@@ -18,6 +18,8 @@ All notable changes to the EbbingFlow project will be documented in this file st
 - **OpenAI-compatible chat API**: Added `/v1/chat/completions` and `/api/chat/completions` for local external frontends, with non-streaming and SSE streaming responses.
 
 ### Changed
+- **Runtime connection reuse**: ChatEngine now reuses its PersonaManager, Neo4j driver, and VectorStorer across turns, and releases them during shutdown or demo-data restore.
+- **Date-window retrieval contract**: Natural-language date windows now use stable `YYYY-MM-DDT00:00:00Z` to `YYYY-MM-DDT23:59:59Z` boundaries after local date resolution, avoiding previous-day UTC drift in audits.
 - **Structured recall coverage**: Structured retrieval now triggers on `OPINION/preference`, `TASK`, `SCHEDULE`, and `PLAN` query language in addition to finance, health, resource, property, and consumption events.
 - **Chinese structured aggregation intent**: Finance/resource structured recall now recognizes Chinese aggregation questions such as "花了多少钱", "总共", "明细", "清单", and "盘点" even when the older mojibake trigger list misses them.
 - **Structured event write path**: Response-phase memory writing now merges deterministic rule events with LLM-extracted event envelopes, deduplicates exact matches, normalizes them, links evidence, and records audit status for success, empty, partial, or failed extraction.

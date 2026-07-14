@@ -1071,18 +1071,19 @@ class GraphWriterMiddleware(BaseMiddleware):
         except Exception as e:
             import traceback
             logging.getLogger(__name__).error(f"[MemoryGraph] Error: {e}\n{traceback.format_exc()}")
-            await self.event_repo.record_extraction_audit(
-                owner_id=session.user_id,
-                session_id=session.session_id,
-                message_id=source_msg_id,
-                status="failed",
-                rule_event_count=len(rule_envelopes),
-                llm_event_count=len(llm_envelopes),
-                normalized_event_count=len(normalized_envelopes),
-                written_event_count=written_event_count,
-                error=str(e),
-                metadata={"source": "response_phase", "failed_step": current_step},
-            )
+            if self.event_repo:
+                await self.event_repo.record_extraction_audit(
+                    owner_id=session.user_id,
+                    session_id=session.session_id,
+                    message_id=source_msg_id,
+                    status="failed",
+                    rule_event_count=len(rule_envelopes),
+                    llm_event_count=len(llm_envelopes),
+                    normalized_event_count=len(normalized_envelopes),
+                    written_event_count=written_event_count,
+                    error=str(e),
+                    metadata={"source": "response_phase", "failed_step": current_step},
+                )
             await fail_remaining_steps(current_step, str(e))
 
         return ai_output
