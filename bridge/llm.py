@@ -25,6 +25,19 @@ class LLMBridge:
             max_retries=config.max_retries
         )
 
+    def _apply_provider_options(self, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+        options = dict(kwargs)
+        thinking_mode = getattr(self.config, "thinking_mode", "")
+        if thinking_mode not in {"enabled", "disabled"}:
+            return options
+
+        extra_body = dict(options.get("extra_body") or {})
+        thinking = dict(extra_body.get("thinking") or {})
+        thinking["type"] = thinking_mode
+        extra_body["thinking"] = thinking
+        options["extra_body"] = extra_body
+        return options
+
     async def chat_completion(
         self, 
         messages: List[Dict[str, str]], 
@@ -34,6 +47,7 @@ class LLMBridge:
     ) -> Optional[str]:
         try:
             temp = temperature if temperature is not None else self.config.temperature
+            kwargs = self._apply_provider_options(kwargs)
             response = await self.client.chat.completions.create(
                 model=self.config.model,
                 messages=messages,
@@ -61,6 +75,7 @@ class LLMBridge:
     ) -> AsyncGenerator[str, None]:
         try:
             temp = temperature if temperature is not None else self.config.temperature
+            kwargs = self._apply_provider_options(kwargs)
             response = await self.client.chat.completions.create(
                 model=self.config.model,
                 messages=messages,

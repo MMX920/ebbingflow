@@ -32,6 +32,18 @@ class LLMConfig:
         self.timeout = float(os.getenv(f"{prefix}_TIMEOUT", os.getenv("LLM_TIMEOUT", "60.0")))
         self.max_retries = int(os.getenv(f"{prefix}_MAX_RETRIES", os.getenv("LLM_MAX_RETRIES", "2")))
         self.temperature = float(os.getenv(f"{prefix}_TEMPERATURE", "0.7"))
+        configured_thinking_mode = (
+            os.getenv(f"{prefix}_THINKING_MODE")
+            or os.getenv("LLM_THINKING_MODE")
+        )
+        is_deepseek = (
+            "deepseek" in self.model.lower()
+            or "deepseek" in self.base_url.lower()
+        )
+        self.thinking_mode = (
+            configured_thinking_mode
+            or ("disabled" if is_deepseek else "")
+        ).strip().lower()
 
 class EmbedConfig:
     """嵌入模型配置 (支持 Local, Ollama, OpenAI)"""

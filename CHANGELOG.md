@@ -18,6 +18,7 @@ All notable changes to the EbbingFlow project will be documented in this file st
 - **OpenAI-compatible chat API**: Added `/v1/chat/completions` and `/api/chat/completions` for local external frontends, with non-streaming and SSE streaming responses.
 
 ### Changed
+- **Benchmark inference mode**: LongMemEval native benchmark runs now use DeepSeek V4 Flash with reasoning disabled for both primary responses and memory extraction, keeping the comparison focused on EbbingFlow's native memory behavior.
 - **Runtime connection reuse**: ChatEngine now reuses its PersonaManager, Neo4j driver, and VectorStorer across turns, and releases them during shutdown or demo-data restore.
 - **Date-window retrieval contract**: Natural-language date windows now use stable `YYYY-MM-DDT00:00:00Z` to `YYYY-MM-DDT23:59:59Z` boundaries after local date resolution, avoiding previous-day UTC drift in audits.
 - **Structured recall coverage**: Structured retrieval now triggers on `OPINION/preference`, `TASK`, `SCHEDULE`, and `PLAN` query language in addition to finance, health, resource, property, and consumption events.
