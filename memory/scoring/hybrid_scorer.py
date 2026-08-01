@@ -222,7 +222,18 @@ class HybridScorer:
         }
         policies = {
             "fact": {
-                "budgets": {**base_budgets, "graph": 5, "structured": 3, "sql": 3, "episode": 0, "saga": 0},
+                # Exact-fact recall should reserve prompt capacity for SQL,
+                # structured values, and lexical matches instead of letting
+                # broad graph/vector candidates occupy the whole Top-K.
+                "budgets": {
+                    **base_budgets,
+                    "graph": 2,
+                    "vector": 1,
+                    "structured": 3,
+                    "sql": 3,
+                    "episode": 0,
+                    "saga": 0,
+                },
                 "multipliers": {"episode": 0.45, "saga": 0.35},
             },
             "summary": {

@@ -61,6 +61,24 @@ def test_fact_queries_strictly_exclude_zero_budget_narrative_when_no_evidence():
     assert scored == []
 
 
+def test_fact_queries_reserve_top_k_capacity_for_exact_evidence_sources():
+    scorer = HybridScorer()
+    candidates = (
+        [_candidate(f"graph {i}", "graph") for i in range(5)]
+        + [_candidate(f"vector {i}", "vector") for i in range(3)]
+        + [_candidate(f"structured {i}", "structured") for i in range(3)]
+        + [_candidate(f"sql {i}", "sql") for i in range(3)]
+    )
+
+    scored = scorer.score(candidates, top_k=8, query_intent="fact")
+    source_types = [candidate.source_type for candidate in scored]
+
+    assert source_types.count("graph") <= 2
+    assert source_types.count("vector") <= 1
+    assert "structured" in source_types
+    assert "sql" in source_types
+
+
 def test_summary_and_long_term_queries_can_promote_narrative_layers():
     scorer = HybridScorer()
     candidates = [

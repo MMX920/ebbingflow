@@ -360,7 +360,7 @@ subject + object + predicate + action_type + context
 
 We are looking for strategic partners, research collaborators, and early adopters to jointly advance the long-term memory infrastructure.
 
-- WeChat: [aiassisbot]
+- WeChat: [ebbingflow]
 - Business Inquiries: [update later]
 
 ---

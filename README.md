@@ -364,7 +364,7 @@ subject + object + predicate + action_type + context
 
 我们正在寻找战略合作伙伴、研究协作者与早期使用者，共同推进长期记忆基础设施。
 
-- WeChat: [aiassisbot]
+- WeChat: [ebbingflow]
 - Business Inquiries: [update later]
 
 ---
